@@ -135,8 +135,10 @@ with tab2:
         if action == "Edit page text (direct, in-place)":
             st.write(
                 "Works best on PDFs that already have real text (not scanned photos). "
-                "Pick a page, edit any text box below, then apply — your edit is placed "
-                "in the exact same spot and size, so nothing shifts or misaligns."
+                "Each numbered box below matches the same numbered box drawn on the page "
+                "preview image, so you can see exactly where your edit will land. "
+                "Edit any box, then apply — text is placed in the same spot and size, "
+                "so nothing shifts or misaligns."
             )
             page_num = st.number_input(
                 "Page number to edit", min_value=1, max_value=doc_pdf.page_count, value=1
@@ -144,49 +146,82 @@ with tab2:
             page_index = page_num - 1
             page = doc_pdf[page_index]
 
-            # Show a preview image of the page so the user can see the layout
-            pix = page.get_pixmap(matrix=fitz.Matrix(1.3, 1.3))
-            st.image(pix.tobytes("png"), caption=f"Page {page_num} preview", width=400)
+            # Extract editable text as grouped blocks (paragraphs/lines), not individual words
+            raw_blocks = page.get_text("blocks")
+            blocks = [b for b in raw_blocks if b[4].strip()]
 
-            # Extract editable text spans with their position/size info
-            text_dict = page.get_text("dict")
-            spans = []
-            for block in text_dict["blocks"]:
-                for line in block.get("lines", []):
-                    for span in line["spans"]:
-                        if span["text"].strip():
-                            spans.append(span)
+            # Draw numbered boxes on the preview so boxes map visually to the page
+            zoom = 1.3
+            pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
+            from PIL import Image as PILImage, ImageDraw
+            preview_img = PILImage.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
+            draw = ImageDraw.Draw(preview_img)
+            for i, b in enumerate(blocks):
+                x0, y0, x1, y1 = [v * zoom for v in b[:4]]
+                draw.rectangle([x0, y0, x1, y1], outline="red", width=2)
+                draw.text((x0, max(0, y0 - 14)), f"#{i + 1}", fill="red")
+            st.image(preview_img, caption=f"Page {page_num} — boxes numbered to match the list below", width=500)
 
-            if not spans:
+            if not blocks:
                 st.warning(
                     "No selectable text found on this page — it's likely a scanned image. "
                     "Use the 'Image → Word/Excel' tab instead, or the PDF-to-Word conversion below."
                 )
             else:
-                st.write(f"Found **{len(spans)}** text boxes on this page:")
+                st.write(f"**{len(blocks)}** editable text blocks found on this page:")
                 edited_values = []
-                for i, span in enumerate(spans):
-                    val = st.text_input(f"Text box {i+1}", span["text"], key=f"span_{page_index}_{i}")
+                for i, b in enumerate(blocks):
+                    original_text = b[4].rstrip("\n")
+                    val = st.text_area(
+                        f"Box #{i + 1}", original_text, height=68, key=f"block_{page_index}_{i}"
+                    )
                     edited_values.append(val)
 
                 if st.button("Apply edits to this page and download"):
+                    # Determine average font size per block (fallback to 11)
+                    text_dict = page.get_text("dict")
+                    dict_blocks = text_dict["blocks"]
+
                     changed_any = False
-                    for span, new_val in zip(spans, edited_values):
-                        if new_val != span["text"]:
+                    edits = []  # (bbox, new_text, fontsize)
+                    for i, (b, new_val) in enumerate(zip(blocks, edited_values)):
+                        original_text = b[4].rstrip("\n")
+                        if new_val != original_text:
                             changed_any = True
-                            bbox = fitz.Rect(span["bbox"])
-                            page.add_redact_annot(bbox, fill=(1, 1, 1))
-                    page.apply_redactions()
-                    for span, new_val in zip(spans, edited_values):
-                        if new_val != span["text"]:
-                            bbox = fitz.Rect(span["bbox"])
-                            origin = (bbox.x0, bbox.y1 - 2)
-                            page.insert_text(
-                                origin, new_val, fontsize=span["size"], fontname="helv"
-                            )
+                            bbox = fitz.Rect(b[:4])
+                            # find matching dict block for font size (best-effort by position)
+                            fontsize = 11
+                            for db in dict_blocks:
+                                for line in db.get("lines", []):
+                                    for span in line["spans"]:
+                                        if fitz.Rect(span["bbox"]).intersects(bbox):
+                                            fontsize = span["size"]
+                                            break
+                            edits.append((bbox, new_val, fontsize))
+
                     if not changed_any:
                         st.info("No changes were made.")
                     else:
+                        for bbox, new_val, fontsize in edits:
+                            page.add_redact_annot(bbox, fill=(1, 1, 1))
+                        page.apply_redactions()
+                        page_rect = page.rect
+                        for bbox, new_val, fontsize in edits:
+                            # Give the box room to grow (in case new text is longer than old)
+                            padded = fitz.Rect(
+                                bbox.x0,
+                                bbox.y0,
+                                min(bbox.x0 + max(bbox.width, 300), page_rect.width - 36),
+                                bbox.y1,
+                            )
+                            padded.y1 = min(padded.y1 + fontsize * 4, page_rect.height - 36)
+                            size = fontsize
+                            rc = page.insert_textbox(padded, new_val, fontsize=size, fontname="helv")
+                            tries = 0
+                            while rc < 0 and size > 6 and tries < 8:
+                                size -= 1
+                                rc = page.insert_textbox(padded, new_val, fontsize=size, fontname="helv")
+                                tries += 1
                         out = io.BytesIO(doc_pdf.tobytes())
                         st.success("Edits applied.")
                         st.download_button(
