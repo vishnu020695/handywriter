@@ -13,6 +13,7 @@ HOW TO RUN (see README.md for full details):
 import io
 import os
 import tempfile
+import zipfile
 
 import streamlit as st
 from PIL import Image
@@ -26,7 +27,10 @@ st.set_page_config(page_title="HandyWriter", page_icon="✍️", layout="wide")
 st.title("✍️ HandyWriter")
 st.caption("Convert handwritten/scanned images to Word or Excel, and edit PDFs — free & offline.")
 
-tab1, tab2 = st.tabs(["📝 Image → Word / Excel", "📄 PDF Editor"])
+tab1, tab2, tab3 = st.tabs(
+    ["📝 Image → Word / Excel", "📄 PDF Editor", "📬 Bulk Mail Merge"]
+)
+
 
 # ---------------------------------------------------------------------------
 # TAB 1: Image -> Word / Excel
@@ -125,6 +129,7 @@ with tab2:
             "Choose an action",
             [
                 "Edit page text (direct, in-place)",
+                "Edit images / logo (replace or delete)",
                 "Delete pages",
                 "Rotate pages",
                 "Add text watermark",
@@ -231,7 +236,70 @@ with tab2:
                             mime="application/pdf",
                         )
 
-        if action == "Delete pages":
+        elif action == "Edit images / logo (replace or delete)":
+            st.write(
+                "Replace a logo/image with your own, or delete it entirely, without "
+                "shifting any of the surrounding text."
+            )
+            page_num_img = st.number_input(
+                "Page number", min_value=1, max_value=doc_pdf.page_count, value=1, key="img_page_num"
+            )
+            page_index_img = page_num_img - 1
+            page_img = doc_pdf[page_index_img]
+
+            images_found = page_img.get_images(full=True)
+            if not images_found:
+                st.warning("No images found on this page.")
+            else:
+                st.write(f"**{len(images_found)}** image(s) found on this page:")
+                for idx, img_info in enumerate(images_found):
+                    xref = img_info[0]
+                    rects = page_img.get_image_rects(xref)
+                    if not rects:
+                        continue
+                    rect = rects[0]
+
+                    # show a small preview crop of this image area
+                    zoom = 2
+                    pix = page_img.get_pixmap(clip=rect, matrix=fitz.Matrix(zoom, zoom))
+                    st.image(pix.tobytes("png"), caption=f"Image #{idx + 1} (page {page_num_img})", width=200)
+
+                    col_a, col_b = st.columns(2)
+                    with col_a:
+                        replacement = st.file_uploader(
+                            f"Replace image #{idx + 1} with:",
+                            type=["png", "jpg", "jpeg"],
+                            key=f"img_replace_{page_index_img}_{idx}",
+                        )
+                        if replacement and st.button(f"Apply replacement to image #{idx + 1}", key=f"apply_replace_{page_index_img}_{idx}"):
+                            new_bytes = replacement.read()
+                            page_img.add_redact_annot(rect, fill=(1, 1, 1))
+                            page_img.apply_redactions()
+                            page_img.insert_image(rect, stream=new_bytes)
+                            out_img = io.BytesIO(doc_pdf.tobytes())
+                            st.success(f"Image #{idx + 1} replaced.")
+                            st.download_button(
+                                "⬇️ Download edited PDF",
+                                data=out_img,
+                                file_name="edited_image.pdf",
+                                mime="application/pdf",
+                                key=f"dl_replace_{page_index_img}_{idx}",
+                            )
+                    with col_b:
+                        if st.button(f"🗑️ Delete image #{idx + 1}", key=f"delete_{page_index_img}_{idx}"):
+                            page_img.add_redact_annot(rect, fill=(1, 1, 1))
+                            page_img.apply_redactions()
+                            out_img = io.BytesIO(doc_pdf.tobytes())
+                            st.success(f"Image #{idx + 1} deleted.")
+                            st.download_button(
+                                "⬇️ Download edited PDF",
+                                data=out_img,
+                                file_name="edited_image.pdf",
+                                mime="application/pdf",
+                                key=f"dl_delete_{page_index_img}_{idx}",
+                            )
+
+        elif action == "Delete pages":
             pages_to_delete = st.text_input(
                 "Page numbers to delete (comma-separated, e.g. 1,3,5)"
             )
@@ -300,6 +368,111 @@ with tab2:
                     )
                 os.remove(tmp_pdf_path)
                 os.remove(tmp_docx_path)
+
+# ---------------------------------------------------------------------------
+# TAB 3: Bulk Mail Merge (Excel + PDF template -> many personalized PDFs)
+# ---------------------------------------------------------------------------
+with tab3:
+    st.subheader("Generate hundreds/thousands of personalized letters at once")
+    st.write(
+        "**Step 1:** Prepare your template PDF with placeholder tokens where "
+        "personal info should go — for example `{{NAME}}` and `{{DEPARTMENT}}`. "
+        "Tip: you can create these tokens using the **PDF Editor** tab above — "
+        "edit any real name/department in your existing offer letter and replace "
+        "it with a token like `{{NAME}}`, then save that as your template."
+    )
+    st.write(
+        "**Step 2:** Upload an Excel sheet where the column headers exactly match "
+        "your tokens (without the curly braces) — e.g. columns named `NAME`, "
+        "`DEPARTMENT`, `START_DATE`."
+    )
+
+    def _merge_one(template_bytes, replacements):
+        doc = fitz.open(stream=template_bytes, filetype="pdf")
+        for page in doc:
+            blocks = [b for b in page.get_text("blocks") if b[4].strip()]
+            text_dict = page.get_text("dict")
+            dict_blocks = text_dict["blocks"]
+            edits = []
+            for b in blocks:
+                original = b[4]
+                new_text = original
+                changed = False
+                for token, val in replacements.items():
+                    ph = "{{" + str(token) + "}}"
+                    if ph in new_text:
+                        new_text = new_text.replace(ph, str(val))
+                        changed = True
+                if changed:
+                    bbox = fitz.Rect(b[:4])
+                    fontsize = 11
+                    for db in dict_blocks:
+                        for line in db.get("lines", []):
+                            for span in line["spans"]:
+                                if fitz.Rect(span["bbox"]).intersects(bbox):
+                                    fontsize = span["size"]
+                    edits.append((bbox, new_text.rstrip("\n"), fontsize))
+            for bbox, new_text, fontsize in edits:
+                page.add_redact_annot(bbox, fill=(1, 1, 1))
+            page.apply_redactions()
+            page_rect = page.rect
+            for bbox, new_text, fontsize in edits:
+                padded = fitz.Rect(
+                    bbox.x0, bbox.y0,
+                    min(bbox.x0 + max(bbox.width, 300), page_rect.width - 36),
+                    bbox.y1,
+                )
+                padded.y1 = min(padded.y1 + fontsize * 4, page_rect.height - 36)
+                size = fontsize
+                rc = page.insert_textbox(padded, new_text, fontsize=size, fontname="helv")
+                tries = 0
+                while rc < 0 and size > 6 and tries < 8:
+                    size -= 1
+                    rc = page.insert_textbox(padded, new_text, fontsize=size, fontname="helv")
+                    tries += 1
+        return doc.tobytes()
+
+    template_pdf = st.file_uploader("Upload template PDF (with {{TOKENS}})", type=["pdf"], key="mm_template")
+    excel_file = st.file_uploader("Upload Excel sheet (.xlsx)", type=["xlsx"], key="mm_excel")
+
+    if template_pdf and excel_file:
+        template_bytes = template_pdf.read()
+        wb = openpyxl.load_workbook(io.BytesIO(excel_file.read()))
+        ws = wb.active
+        headers = [c.value for c in ws[1]]
+        rows = list(ws.iter_rows(min_row=2, values_only=True))
+        st.info(f"Found **{len(rows)}** rows and columns: {', '.join(str(h) for h in headers)}")
+
+        folder_col = st.selectbox(
+            "Which column should be used to sort output into folders? (e.g. department)",
+            options=["(no folders — flat list)"] + [str(h) for h in headers],
+        )
+        name_col = st.selectbox(
+            "Which column should be used to name each file? (e.g. name)",
+            options=[str(h) for h in headers],
+        )
+
+        if st.button(f"Generate all {len(rows)} personalized PDFs"):
+            zip_buf = io.BytesIO()
+            progress = st.progress(0, text="Generating...")
+            with zipfile.ZipFile(zip_buf, "w") as zf:
+                for i, row in enumerate(rows):
+                    rowdict = dict(zip(headers, row))
+                    out_pdf = _merge_one(template_bytes, rowdict)
+                    fname = str(rowdict.get(name_col, f"row_{i+1}")).replace(" ", "_").replace("/", "-")
+                    if folder_col != "(no folders — flat list)":
+                        folder = str(rowdict.get(folder_col, "General")).replace(" ", "_").replace("/", "-")
+                        zf.writestr(f"{folder}/{fname}.pdf", out_pdf)
+                    else:
+                        zf.writestr(f"{fname}.pdf", out_pdf)
+                    progress.progress((i + 1) / len(rows), text=f"Generated {i+1}/{len(rows)}")
+            st.success(f"Done! Generated {len(rows)} personalized PDFs.")
+            st.download_button(
+                "⬇️ Download all as ZIP",
+                data=zip_buf.getvalue(),
+                file_name="personalized_letters.zip",
+                mime="application/zip",
+            )
 
 st.divider()
 st.caption("HandyWriter · 100% free & open-source · Your files are processed locally, never uploaded anywhere.")
