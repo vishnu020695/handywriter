@@ -353,13 +353,45 @@ with tab2:
                         break
                 return best
 
-            def _embedded_font_alias(page, span_font_name):
+            def _embedded_font_alias(page, span_font_name, want_bold=False):
                 """Try to pull the ACTUAL embedded font used by the original text,
                 so the replacement matches the certificate's real typeface instead
-                of falling back to a generic Base-14 font."""
+                of falling back to a generic Base-14 font. If want_bold is True,
+                only accept a font that is actually bold (either a genuine bold
+                sibling like 'Arial-Bold', or the original font itself if IT is
+                already the bold weight) — never silently hand back a regular
+                weight when the user asked for bold."""
                 try:
-                    for xref, ext, subtype, basefont, refname, encoding in page.get_fonts(full=True):
-                        if basefont == span_font_name or span_font_name in basefont:
+                    candidates = list(page.get_fonts(full=True))
+                    family_root = (span_font_name or "").split("-")[0].split(",")[0].lower()
+
+                    if want_bold:
+                        # 1) look for a genuine bold sibling of the same family
+                        for xref, ext, subtype, basefont, refname, encoding in candidates:
+                            bf_lower = basefont.lower()
+                            if family_root and family_root in bf_lower and "bold" in bf_lower:
+                                fontname, fontext, fonttype, fontbuffer = doc_pdf.extract_font(xref)
+                                if fontbuffer:
+                                    alias = f"embedded_{xref}"
+                                    page.insert_font(fontname=alias, fontbuffer=fontbuffer)
+                                    return alias
+                        # 2) the original font itself is already bold-named
+                        if span_font_name and "bold" in span_font_name.lower():
+                            for xref, ext, subtype, basefont, refname, encoding in candidates:
+                                if basefont == span_font_name:
+                                    fontname, fontext, fonttype, fontbuffer = doc_pdf.extract_font(xref)
+                                    if fontbuffer:
+                                        alias = f"embedded_{xref}"
+                                        page.insert_font(fontname=alias, fontbuffer=fontbuffer)
+                                        return alias
+                        # no real bold variant embedded in this PDF — tell the caller
+                        # so it can fall back to a synthetic bold instead of silently
+                        # rendering regular weight
+                        return None
+
+                    # regular weight: reuse the exact original font
+                    for xref, ext, subtype, basefont, refname, encoding in candidates:
+                        if basefont == span_font_name or (span_font_name and span_font_name in basefont):
                             fontname, fontext, fonttype, fontbuffer = doc_pdf.extract_font(xref)
                             if fontbuffer:
                                 alias = f"embedded_{xref}"
@@ -411,11 +443,17 @@ with tab2:
                                 # (or a flags-based guess) if that's not possible.
                                 use_fontname = fr_fontname
                                 if font_choice == "Default (Helvetica)" and span_font_name:
-                                    embedded_alias = _embedded_font_alias(page, span_font_name)
+                                    embedded_alias = _embedded_font_alias(page, span_font_name, want_bold=fr_bold)
                                     if embedded_alias:
                                         use_fontname = embedded_alias
                                     else:
-                                        use_fontname = _flags_to_base14(span_flags, serif_hint=True)
+                                        # no matching embedded font (or no real bold
+                                        # sibling when Bold was requested) — fall back
+                                        # to a Base-14 font, but force the bold bit
+                                        # whenever the checkbox is checked so it's
+                                        # never silently dropped
+                                        effective_flags = span_flags | 16 if fr_bold else span_flags
+                                        use_fontname = _flags_to_base14(effective_flags, serif_hint=True)
 
                                 page.add_redact_annot(redact_rect, fill=(1, 1, 1))
                                 page.apply_redactions()
