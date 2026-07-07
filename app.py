@@ -61,7 +61,7 @@ with tab1:
                 st.download_button("⬇️ Download Excel file", data=buf, file_name="converted.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
 # ---------------------------------------------------------------------------
-# TAB 2: PDF Editor (ஒற்றை PDF-ஐ எடிட் செய்யும் வசதி சேர்க்கப்பட்டது)
+# TAB 2: PDF Editor (கோட்டின் மேல் துல்லியமாக எழுதும் வகையில் மாற்றப்பட்டது)
 # ---------------------------------------------------------------------------
 with tab2:
     st.subheader("Simple PDF Editing")
@@ -74,82 +74,68 @@ with tab2:
         action = st.selectbox(
             "Choose an action",
             [
-                "Edit page text (direct, in-place)",
+                "Add Text Over Lines (Perfect Alignment)",
                 "Delete pages",
-                "Rotate pages",
-                "Add text watermark"
+                "Rotate pages"
             ],
         )
 
-        if action == "Edit page text (direct, in-place)":
-            st.write("PDF-ல் மாற்ற வேண்டிய டெக்ஸ்ட் பாக்ஸ்களை கீழே திருத்திவிட்டு Apply செய்யவும்.")
+        if action == "Add Text Over Lines (Perfect Alignment)":
+            st.write("PDF-ல் உள்ள கோடுகளுக்கு மேல் புதிய டெக்ஸ்ட்டை அலைன்மென்ட் மாறாமல் சேர்க்கலாம்.")
             page_num = st.number_input("Page number to edit", min_value=1, max_value=doc_pdf.page_count, value=1)
             page_index = page_num - 1
             page = doc_pdf[page_index]
 
-            raw_blocks = page.get_text("blocks")
-            blocks = [b for b in raw_blocks if b[4].strip()]
-
-            # Preview Block Numbers
-            zoom = 1.3
+            # Convert PDF page to image for coordinate plotting
+            zoom = 2.0  # Higher zoom for high-res exact selection
             pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
-            preview_img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
-            draw = ImageDraw.Draw(preview_img)
-            for i, b in enumerate(blocks):
-                x0, y0, x1, y1 = [v * zoom for v in b[:4]]
-                draw.rectangle([x0, y0, x1, y1], outline="red", width=2)
-                draw.text((x0, max(0, y0 - 14)), f"#{i + 1}", fill="red")
-            st.image(preview_img, caption=f"Page {page_num} — Preview with Box Numbers", width=500)
+            page_img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
+            W, H = page_img.size
 
-            if not blocks:
-                st.warning("இந்த PDF பக்கத்தில் எடிட் செய்யக்கூடிய டெக்ஸ்ட் எதுவும் கிடைக்கவில்லை. இது ஸ்கேன் செய்யப்பட்ட படமாக இருக்கலாம்.")
-            else:
-                st.write(f"**{len(blocks)}** எடிட் செய்யக்கூடிய டெக்ஸ்ட் பாக்ஸ்கள் கண்டறியப்பட்டன:")
-                edited_values = []
-                for i, b in enumerate(blocks):
-                    original_text = b[4].rstrip("\n")
-                    val = st.text_area(f"Box #{i + 1}", original_text, height=68, key=f"block_{page_index}_{i}")
-                    edited_values.append(val)
+            st.write("### 1. பொசிஷன் செட்டிங்ஸ் (X, Y Coordinates)")
+            st.info("கோட்டிற்கு மேல் பெயர் மற்றும் துறை வர வேண்டிய இடத்தை பிக்சல் மதிப்பாக மாற்றவும்.")
 
-                if st.button("Apply edits to this page and download"):
-                    text_dict = page.get_text("dict")
-                    dict_blocks = text_dict["blocks"]
+            col_x1, col_y1, col_s1 = st.columns(3)
+            with col_x1:
+                student_name_x = st.number_input("Name X Position (Horizontal)", min_value=0, max_value=W, value=int(W/2))
+            with col_y1:
+                student_name_y = st.number_input("Name Y Position (Vertical)", min_value=0, max_value=H, value=int(H/2) - 50)
+            with col_s1:
+                font_size_name = st.number_input("Name Font Size", min_value=10, max_value=150, value=32)
 
-                    changed_any = False
-                    edits = []
-                    for i, (b, new_val) in enumerate(zip(blocks, edited_values)):
-                        original_text = b[4].rstrip("\n")
-                        if new_val != original_text:
-                            changed_any = True
-                            bbox = fitz.Rect(b[:4])
-                            fontsize = 11
-                            for db in dict_blocks:
-                                for line in db.get("lines", []):
-                                    for span in line["spans"]:
-                                        if fitz.Rect(span["bbox"]).intersects(bbox):
-                                            fontsize = span["size"]
-                                            break
-                            edits.append((bbox, new_val, fontsize))
+            col_x2, col_y2, col_s2 = st.columns(3)
+            with col_x2:
+                dept_x = st.number_input("Department X Position (Horizontal)", min_value=0, max_value=W, value=int(W/2))
+            with col_y2:
+                dept_y = st.number_input("Department Y Position (Vertical)", min_value=0, max_value=H, value=int(H/2) + 50)
+            with col_s2:
+                font_size_dept = st.number_input("Department Font Size", min_value=10, max_value=150, value=28)
 
-                    if not changed_any:
-                        st.info("மாற்றங்கள் எதுவும் செய்யப்படவில்லை.")
-                    else:
-                        for bbox, new_val, fontsize in edits:
-                            page.add_redact_annot(bbox, fill=(1, 1, 1))
-                        page.apply_redactions()
-                        page_rect = page.rect
-                        for bbox, new_val, fontsize in edits:
-                            padded = fitz.Rect(
-                                bbox.x0, bbox.y0,
-                                min(bbox.x0 + max(bbox.width, 300), page_rect.width - 36),
-                                bbox.y1,
-                            )
-                            padded.y1 = min(padded.y1 + fontsize * 4, page_rect.height - 36)
-                            rc = page.insert_textbox(padded, new_val, fontsize=fontsize, fontname="helv")
-                        
-                        out = io.BytesIO(doc_pdf.tobytes())
-                        st.success("மாற்றங்கள் வெற்றிகரமாகச் சேர்க்கப்பட்டன!")
-                        st.download_button("⬇️ Download edited PDF", data=out, file_name="edited_text.pdf", mime="application/pdf")
+            st.write("### 2. உள்ளிட வேண்டிய விபரங்கள்")
+            input_name = st.text_input("Enter Student Name (NAME)", "AJAY K")
+            input_dept = st.text_input("Enter Department (DEPARTMENT)", "B.Sc. AIML")
+
+            if st.button("Apply Text on PDF and Download"):
+                # Work directly on a high-res image canvas to ensure exact overlaying without text box splitting
+                draw = ImageDraw.Draw(page_img)
+                font = ImageFont.load_default()
+
+                # Write Name
+                left, top, right, bottom = draw.textbbox((0, 0), input_name, font=font)
+                w_name = right - left
+                draw.text((student_name_x - (w_name/2), student_name_y), input_name, fill=(0, 0, 0), font=font)
+
+                # Write Dept
+                left, top, right, bottom = draw.textbbox((0, 0), input_dept, font=font)
+                w_dept = right - left
+                draw.text((dept_x - (w_dept/2), dept_y), input_dept, fill=(0, 0, 0), font=font)
+
+                # Convert the modified high-res image directly back to a clean PDF page
+                pdf_buffer = io.BytesIO()
+                page_img.save(pdf_buffer, format="PDF")
+                
+                st.success("கோட்டிற்கு மேல் டெக்ஸ்ட் பர்ஃபெக்ட்டாக பொருத்தப்பட்டது!")
+                st.download_button("⬇️ Download Perfect PDF", data=pdf_buffer.getvalue(), file_name="perfect_edited.pdf", mime="application/pdf")
 
         elif action == "Delete pages":
             pages_to_delete = st.text_input("Page numbers to delete (comma-separated, e.g. 1,3,5)")
@@ -169,24 +155,6 @@ with tab2:
                     page.set_rotation(angle)
                 out = io.BytesIO(doc_pdf.tobytes())
                 st.download_button("⬇️ Download rotated PDF", data=out, file_name="rotated.pdf", mime="application/pdf")
-
-        elif action == "Add text watermark":
-            wm_text = st.text_input("Watermark text", "CONFIDENTIAL")
-            if st.button("Apply and download"):
-                for page in doc_pdf:
-                    rect = page.rect
-                    center = fitz.Point(rect.width / 2, rect.height / 2)
-                    morph = (center, fitz.Matrix(45))
-                    page.insert_text(
-                        (rect.width / 4, rect.height / 2),
-                        wm_text,
-                        fontsize=40,
-                        color=(0.7, 0.7, 0.7),
-                        overlay=True,
-                        morph=morph,
-                    )
-                out = io.BytesIO(doc_pdf.tobytes())
-                st.download_button("⬇️ Download watermarked PDF", data=out, file_name="watermarked.pdf", mime="application/pdf")
 
 # ---------------------------------------------------------------------------
 # TAB 3: Pixel-Perfect Bulk Certificate Merge (Fixed Alignment)
@@ -233,7 +201,7 @@ with tab3:
         st.info(f"Excel-லில் மொத்தம் **{len(rows)}** மாணவர்கள் கண்டறியப்பட்டனர்.")
         
         st.write("### 3. அலைன்மென்ட் மற்றும் பொசிஷன் செட்டிங்ஸ் (X, Y Coordinates)")
-        st.info("சான்றிதழில் டெக்ஸ்ட் எந்த இடத்தில் (Pixel Position) வர வேண்டும் என்பதை கீழே குறிப்பிடவும்.")
+        st.info("சான்றிதழில் டெக்ಸ್ಟ್ எந்த இடத்தில் (Pixel Position) வர வேண்டும் என்பதை கீழே குறிப்பிடவும்.")
         
         positions = {}
         for h in headers:
