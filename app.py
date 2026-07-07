@@ -1,31 +1,52 @@
+"""
+HandyWriter — Handwritten Image → Word/Excel + Simple PDF Editor
+------------------------------------------------------------------
+100% free, open-source Python tools only (Tesseract OCR, python-docx,
+openpyxl, PyMuPDF). Runs as a local web app in your browser — works
+on Windows, Mac, Linux, and Android/iPhone (via browser, same WiFi).
+
+HOW TO RUN (see README.md for full details):
+    pip install -r requirements.txt
+    streamlit run app.py
+"""
+
 import io
 import os
 import tempfile
 import zipfile
-import re
+
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 import pytesseract
 import fitz  # PyMuPDF
 from docx import Document
+from docx.shared import Inches
 import openpyxl
 
-st.set_page_config(page_title="HandyWriter Ultimate", page_icon="✍️", layout="wide")
-st.title("✍️ HandyWriter Ultimate")
-st.caption("Universal Layout Mapping Engine — Zero Invisible Fonts, Zero Layout Stretches.")
+st.set_page_config(page_title="HandyWriter", page_icon="✍️", layout="wide")
+st.title("✍️ HandyWriter")
+st.caption("Convert handwritten/scanned images to Word or Excel, and edit PDFs — free & offline.")
 
-tab1, tab2, tab3 = st.tabs([
-    "📝 Image → Word / Excel", 
-    "📄 Targeted Single Document Editor", 
-    "📬 Universal Bulk Merge"
-])
+tab1, tab2, tab3 = st.tabs(
+    ["📝 Image → Word / Excel", "📄 PDF Editor", "📬 Bulk Mail Merge"]
+)
+
 
 # ---------------------------------------------------------------------------
 # TAB 1: Image -> Word / Excel
 # ---------------------------------------------------------------------------
 with tab1:
     st.subheader("Convert a handwritten or scanned photo into an editable document")
-    uploaded_img = st.file_uploader("Upload image (JPG, PNG)", type=["jpg", "jpeg", "png"], key="img_upload")
+    st.write(
+        "Upload a clear photo of handwriting or printed text. The app reads the text "
+        "automatically (OCR). **Always check the extracted text below before saving** — "
+        "OCR is not 100% perfect, especially with cursive handwriting, so this lets you "
+        "fix any mistakes first."
+    )
+
+    uploaded_img = st.file_uploader(
+        "Upload image (JPG, PNG)", type=["jpg", "jpeg", "png"], key="img_upload"
+    )
 
     if uploaded_img:
         image = Image.open(uploaded_img).convert("RGB")
@@ -33,226 +54,632 @@ with tab1:
         with col1:
             st.image(image, caption="Your uploaded image", use_container_width=True)
 
-        with st.spinner("Reading text..."):
+        with st.spinner("Reading text from image..."):
+            # psm 6 = assume a uniform block of text (good default for notes/pages)
             extracted_text = pytesseract.image_to_string(image, config="--psm 6")
 
         with col2:
-            edited_text = st.text_area("Editable text", extracted_text, height=350)
+            st.write("**Extracted text (edit to fix any mistakes):**")
+            edited_text = st.text_area(
+                "Editable text", extracted_text, height=350, label_visibility="collapsed"
+            )
 
         st.write("### Save as:")
         c1, c2 = st.columns(2)
+
         with c1:
             if st.button("💾 Create Word (.docx)", use_container_width=True):
                 doc = Document()
+                doc.add_heading("Converted from image", level=1)
                 for line in edited_text.split("\n"):
                     doc.add_paragraph(line)
                 buf = io.BytesIO()
                 doc.save(buf)
                 buf.seek(0)
-                st.download_button("⬇️ Download Word file", data=buf, file_name="converted.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True)
+                st.download_button(
+                    "⬇️ Download Word file",
+                    data=buf,
+                    file_name="converted.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    use_container_width=True,
+                )
 
         with c2:
             if st.button("💾 Create Excel (.xlsx)", use_container_width=True):
+                # Each non-empty line becomes a row; splits on 2+ spaces or tabs into columns
                 wb = openpyxl.Workbook()
                 ws = wb.active
+                ws.title = "Converted"
                 for line in edited_text.split("\n"):
-                    if not line.strip(): continue
+                    if not line.strip():
+                        continue
+                    # naive column split: tabs, or 2+ spaces, treated as column breaks
+                    import re
                     cells = re.split(r"\t|\s{2,}", line.strip())
                     ws.append(cells)
                 buf = io.BytesIO()
                 wb.save(buf)
                 buf.seek(0)
-                st.download_button("⬇️ Download Excel file", data=buf, file_name="converted.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+                st.download_button(
+                    "⬇️ Download Excel file",
+                    data=buf,
+                    file_name="converted.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
 
 # ---------------------------------------------------------------------------
-# TAB 2: Image Canvas Single PDF/Image Editor (No Invisible Fonts)
+# TAB 2: PDF Editor
 # ---------------------------------------------------------------------------
 with tab2:
-    st.subheader("🔍 Canvas Overlay Single Editor")
-    st.write("Upload a PDF or an Image. This mode converts pages into a canvas background so your text overlays perfectly above lines at any scale.")
-    
-    single_file = st.file_uploader("Upload PDF or Image Layout Template", type=["pdf", "png", "jpg", "jpeg"], key="single_canvas_upload")
-    
-    if single_file:
-        # Load background layout smoothly whether it is a native image or a PDF page
-        if single_file.name.lower().endswith('.pdf'):
-            pdf_doc = fitz.open(stream=single_file.read(), filetype="pdf")
-            page_idx = st.number_input("Page number to edit:", min_value=1, max_value=pdf_doc.page_count, value=1, key="single_pdf_pg")
-            pix = pdf_doc[page_idx - 1].get_pixmap(matrix=fitz.Matrix(2.0, 2.0)) # high-res baseline conversion
-            base_image = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
-        else:
-            base_image = Image.open(single_file).convert("RGB")
-            
-        W, H = base_image.size
-        st.success(f"Layout Template Rendered! Canvas Area Dimensions: {W}x{H} Pixels.")
-        
-        # Setup session variables dynamically
-        if "single_fields_count" not in st.session_state:
-            st.session_state.single_fields_count = 2
-            
-        col_s_add, col_s_rem = st.columns(2)
-        with col_s_add:
-            if st.button("➕ Add Custom Text Layer Field", key="add_s_field"):
-                st.session_state.single_fields_count += 1
-                st.rerun()
-        with col_s_rem:
-            if st.button("🗑️ Remove Last Layer Field", key="rem_s_field") and st.session_state.single_fields_count > 1:
-                st.session_state.single_fields_count -= 1
-                st.rerun()
-                
-        st.write("### ⚙️ Position Configuration Settings & Value Inputs")
-        layers_map = {}
-        for idx in range(st.session_state.single_fields_count):
-            st.markdown(f"**Custom Field Element #{idx+1}**")
-            cx, cy, cs, ca, ct = st.columns([2, 2, 1.5, 2, 4.5])
-            with cx:
-                x_pos = st.number_input(f"X (Horizontal)", min_value=0, max_value=W, value=int(W/2), key=f"s_x_{idx}")
-            with cy:
-                y_pos = st.number_input(f"Y (Vertical)", min_value=0, max_value=H, value=int(H/2) + (idx * 80) - 100, key=f"s_y_{idx}")
-            with cs:
-                f_size = st.number_input(f"Font Size", min_value=10, max_value=200, value=36, key=f"s_s_{idx}")
-            with ca:
-                align_type = st.selectbox(f"Align Type", options=["Center", "Left"], key=f"s_a_{idx}")
-            with ct:
-                text_val = st.text_input(f"Text String Value:", value=f"Sample Field Text #{idx+1}", key=f"s_t_{idx}")
-                
-            layers_map[idx] = {"x": x_pos, "y": y_pos, "size": f_size, "align": align_type, "text": text_val.strip()}
-            st.markdown("<br>", unsafe_with_html=True)
-            
-        if st.button("🚀 Render Canvas & Download Document", use_container_width=True, key="process_single_canvas"):
-            img_copy = base_image.copy()
-            draw = ImageDraw.Draw(img_copy)
-            
-            for idx, data in layers_map.items():
-                if not data["text"]:
-                    continue
+    st.subheader("Simple PDF editing (no misaligned pages, no corruption)")
+    st.write(
+        "Upload a PDF to merge, delete pages, rotate, add a watermark, or convert it into "
+        "an editable Word document."
+    )
+
+    uploaded_pdf = st.file_uploader("Upload PDF", type=["pdf"], key="pdf_upload")
+
+    if uploaded_pdf:
+        pdf_bytes = uploaded_pdf.read()
+        doc_pdf = fitz.open(stream=pdf_bytes, filetype="pdf")
+        st.info(f"Loaded PDF with **{doc_pdf.page_count}** pages.")
+
+        action = st.selectbox(
+            "Choose an action",
+            [
+                "Find & Replace (exact text — safest, no misalignment)",
+                "Edit page text (direct, in-place)",
+                "Edit images / logo (replace or delete)",
+                "Delete pages",
+                "Rotate pages",
+                "Add text watermark",
+                "Convert to editable Word (.docx)",
+            ],
+        )
+
+        if action == "Find & Replace (exact text — safest, no misalignment)":
+            st.write(
+                "Type the exact text you want to change (e.g. `AJAY K`) and what to "
+                "change it to. This only touches that exact text — everything else on "
+                "the page, including text right next to it, stays frozen in place. "
+                "This is the safest option when a name/value sits inside a longer "
+                "sentence or line of underscores."
+            )
+            if "fr_count" not in st.session_state:
+                st.session_state.fr_count = 2
+            c_add, c_rem = st.columns(2)
+            with c_add:
+                if st.button("➕ Add another find & replace"):
+                    st.session_state.fr_count += 1
+                    st.rerun()
+            with c_rem:
+                if st.button("🗑️ Remove last") and st.session_state.fr_count > 1:
+                    st.session_state.fr_count -= 1
+                    st.rerun()
+
+            fr_pairs = []
+            for i in range(st.session_state.fr_count):
+                cfind, creplace = st.columns(2)
+                with cfind:
+                    find_val = st.text_input(f"Find (exact text) #{i+1}", key=f"fr_find_{i}")
+                with creplace:
+                    replace_val = st.text_input(f"Replace with #{i+1}", key=f"fr_replace_{i}")
+                if find_val.strip():
+                    fr_pairs.append((find_val, replace_val))
+
+            if st.button("Apply Find & Replace to entire PDF"):
+                if not fr_pairs:
+                    st.warning("Enter at least one 'Find' value.")
+                else:
+                    total_replacements = 0
+                    for page in doc_pdf:
+                        page_rect = page.rect
+                        for find_val, replace_val in fr_pairs:
+                            rects = page.search_for(find_val)
+                            for rect in rects:
+                                fontsize = 11
+                                metrics = page.get_text("dict", clip=rect)
+                                try:
+                                    fontsize = metrics["blocks"][0]["lines"][0]["spans"][0]["size"]
+                                except Exception:
+                                    pass
+                                page.add_redact_annot(rect, fill=(1, 1, 1))
+                                page.apply_redactions()
+                                padded = fitz.Rect(
+                                    rect.x0, rect.y0,
+                                    min(rect.x0 + max(rect.width, 300), page_rect.width - 20),
+                                    rect.y1,
+                                )
+                                padded.y1 = min(padded.y1 + fontsize * 3, page_rect.height - 20)
+                                size = fontsize
+                                rc = page.insert_textbox(padded, replace_val, fontsize=size, fontname="helv")
+                                tries = 0
+                                while rc < 0 and size > 6 and tries < 8:
+                                    size -= 1
+                                    rc = page.insert_textbox(padded, replace_val, fontsize=size, fontname="helv")
+                                    tries += 1
+                                total_replacements += 1
+                    if total_replacements == 0:
+                        st.warning("None of the 'Find' text was found in this PDF. Check spelling/spacing matches exactly.")
+                    else:
+                        out = io.BytesIO(doc_pdf.tobytes())
+                        st.success(f"Made {total_replacements} replacement(s) across the document.")
+                        st.download_button(
+                            "⬇️ Download edited PDF",
+                            data=out,
+                            file_name="find_replace_edited.pdf",
+                            mime="application/pdf",
+                        )
+
+        elif action == "Edit page text (direct, in-place)":
+            st.write(
+                "Works best on PDFs that already have real text (not scanned photos). "
+                "Each numbered box below matches the same numbered box drawn on the page "
+                "preview image, so you can see exactly where your edit will land. "
+                "Edit any box, then apply — text is placed in the same spot and size, "
+                "so nothing shifts or misaligns."
+            )
+            page_num = st.number_input(
+                "Page number to edit", min_value=1, max_value=doc_pdf.page_count, value=1
+            )
+            page_index = page_num - 1
+            page = doc_pdf[page_index]
+
+            # Extract editable text at the LINE level (not paragraph blocks, not
+            # individual words). This is the level that correctly keeps separate
+            # fields on the same visual line (e.g. a name and a department sitting
+            # side by side on a certificate) as separate editable boxes, while still
+            # keeping normal sentences/paragraphs as single boxes.
+            text_dict = page.get_text("dict")
+            lines_data = []  # list of (bbox, text, fontsize)
+            for db in text_dict["blocks"]:
+                for line in db.get("lines", []):
+                    line_text = "".join(s["text"] for s in line["spans"])
+                    if line_text.strip():
+                        fontsize = line["spans"][0]["size"] if line["spans"] else 11
+                        lines_data.append((line["bbox"], line_text, fontsize))
+
+            # Draw numbered boxes on the preview so boxes map visually to the page
+            zoom = 1.3
+            pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
+            from PIL import Image as PILImage, ImageDraw
+            preview_img = PILImage.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
+            draw = ImageDraw.Draw(preview_img)
+            for i, (bbox, _, _) in enumerate(lines_data):
+                x0, y0, x1, y1 = [v * zoom for v in bbox]
+                draw.rectangle([x0, y0, x1, y1], outline="red", width=2)
+                draw.text((x0, max(0, y0 - 14)), f"#{i + 1}", fill="red")
+            st.image(preview_img, caption=f"Page {page_num} — boxes numbered to match the list below", width=500)
+
+            if not lines_data:
+                st.warning(
+                    "No selectable text found on this page — it's likely a scanned image. "
+                    "Use the 'Image → Word/Excel' tab instead, or the PDF-to-Word conversion below."
+                )
+            else:
+                st.write(f"**{len(lines_data)}** editable text lines found on this page:")
+                edited_values = []
+                for i, (bbox, line_text, fontsize) in enumerate(lines_data):
+                    original_text = line_text.rstrip("\n")
+                    val = st.text_area(
+                        f"Box #{i + 1}", original_text, height=68, key=f"line_{page_index}_{i}"
+                    )
+                    edited_values.append(val)
+
+                if st.button("Apply edits to this page and download"):
+                    changed_any = False
+                    edits = []  # (bbox, new_text, fontsize)
+                    for (bbox, line_text, fontsize), new_val in zip(lines_data, edited_values):
+                        original_text = line_text.rstrip("\n")
+                        if new_val != original_text:
+                            changed_any = True
+                            edits.append((fitz.Rect(bbox), new_val, fontsize))
+
+                    if not changed_any:
+                        st.info("No changes were made.")
+                    else:
+                        for bbox, new_val, fontsize in edits:
+                            page.add_redact_annot(bbox, fill=(1, 1, 1))
+                        page.apply_redactions()
+                        page_rect = page.rect
+                        for bbox, new_val, fontsize in edits:
+                            # Give the box room to grow (in case new text is longer than old)
+                            padded = fitz.Rect(
+                                bbox.x0,
+                                bbox.y0,
+                                min(bbox.x0 + max(bbox.width, 300), page_rect.width - 20),
+                                bbox.y1,
+                            )
+                            padded.y1 = min(padded.y1 + fontsize * 3, page_rect.height - 20)
+                            size = fontsize
+                            rc = page.insert_textbox(padded, new_val, fontsize=size, fontname="helv")
+                            tries = 0
+                            while rc < 0 and size > 6 and tries < 8:
+                                size -= 1
+                                rc = page.insert_textbox(padded, new_val, fontsize=size, fontname="helv")
+                                tries += 1
+                        out = io.BytesIO(doc_pdf.tobytes())
+                        st.success("Edits applied.")
+                        st.download_button(
+                            "⬇️ Download edited PDF",
+                            data=out,
+                            file_name="edited_text.pdf",
+                            mime="application/pdf",
+                        )
+
+        elif action == "Edit images / logo (replace or delete)":
+            st.write(
+                "Replace a logo/image with your own, or delete it entirely, without "
+                "shifting any of the surrounding text."
+            )
+            page_num_img = st.number_input(
+                "Page number", min_value=1, max_value=doc_pdf.page_count, value=1, key="img_page_num"
+            )
+            page_index_img = page_num_img - 1
+            page_img = doc_pdf[page_index_img]
+
+            images_found = page_img.get_images(full=True)
+            if not images_found:
+                st.warning("No images found on this page.")
+            else:
+                st.write(f"**{len(images_found)}** image(s) found on this page:")
+                for idx, img_info in enumerate(images_found):
+                    xref = img_info[0]
+                    rects = page_img.get_image_rects(xref)
+                    if not rects:
+                        continue
+                    rect = rects[0]
+
+                    # show a small preview crop of this image area
+                    zoom = 2
+                    pix = page_img.get_pixmap(clip=rect, matrix=fitz.Matrix(zoom, zoom))
+                    st.image(pix.tobytes("png"), caption=f"Image #{idx + 1} (page {page_num_img})", width=200)
+
+                    col_a, col_b = st.columns(2)
+                    with col_a:
+                        replacement = st.file_uploader(
+                            f"Replace image #{idx + 1} with:",
+                            type=["png", "jpg", "jpeg"],
+                            key=f"img_replace_{page_index_img}_{idx}",
+                        )
+                        if replacement and st.button(f"Apply replacement to image #{idx + 1}", key=f"apply_replace_{page_index_img}_{idx}"):
+                            new_bytes = replacement.read()
+                            page_img.add_redact_annot(rect, fill=(1, 1, 1))
+                            page_img.apply_redactions()
+                            page_img.insert_image(rect, stream=new_bytes)
+                            out_img = io.BytesIO(doc_pdf.tobytes())
+                            st.success(f"Image #{idx + 1} replaced.")
+                            st.download_button(
+                                "⬇️ Download edited PDF",
+                                data=out_img,
+                                file_name="edited_image.pdf",
+                                mime="application/pdf",
+                                key=f"dl_replace_{page_index_img}_{idx}",
+                            )
+                    with col_b:
+                        if st.button(f"🗑️ Delete image #{idx + 1}", key=f"delete_{page_index_img}_{idx}"):
+                            page_img.add_redact_annot(rect, fill=(1, 1, 1))
+                            page_img.apply_redactions()
+                            out_img = io.BytesIO(doc_pdf.tobytes())
+                            st.success(f"Image #{idx + 1} deleted.")
+                            st.download_button(
+                                "⬇️ Download edited PDF",
+                                data=out_img,
+                                file_name="edited_image.pdf",
+                                mime="application/pdf",
+                                key=f"dl_delete_{page_index_img}_{idx}",
+                            )
+
+        elif action == "Delete pages":
+            pages_to_delete = st.text_input(
+                "Page numbers to delete (comma-separated, e.g. 1,3,5)"
+            )
+            if st.button("Apply and download"):
                 try:
-                    font = ImageFont.truetype("LiberationSans-Regular.ttf", data["size"])
-                except:
-                    try:
-                        font = ImageFont.truetype("DejaVuSans.ttf", data["size"])
-                    except:
-                        font = ImageFont.load_default()
-                        
-                left, top, right, bottom = draw.textbbox((0, 0), data["text"], font=font)
-                text_width = right - left
-                
-                final_x = data["x"] - (text_width / 2) if data["align"] == "Center" else data["x"]
-                draw.text((final_x, data["y"]), data["text"], fill=(0, 0, 0), font=font)
-                
-            pdf_out = io.BytesIO()
-            img_copy.save(pdf_out, format="PDF")
-            st.success("Document text compiled with 100% visibility scaling!")
-            st.download_button("⬇️ Download Final Document PDF", data=pdf_out.getvalue(), file_name="canvas_output.pdf", mime="application/pdf", use_container_width=True)
+                    nums = [int(x.strip()) - 1 for x in pages_to_delete.split(",") if x.strip()]
+                    doc_pdf.delete_pages(nums)
+                    out = io.BytesIO(doc_pdf.tobytes())
+                    st.download_button(
+                        "⬇️ Download edited PDF", data=out, file_name="edited.pdf", mime="application/pdf"
+                    )
+                except Exception as e:
+                    st.error(f"Check your page numbers. Details: {e}")
+
+        elif action == "Rotate pages":
+            angle = st.selectbox("Rotate by", [90, 180, 270])
+            if st.button("Apply and download"):
+                for page in doc_pdf:
+                    page.set_rotation(angle)
+                out = io.BytesIO(doc_pdf.tobytes())
+                st.download_button(
+                    "⬇️ Download rotated PDF", data=out, file_name="rotated.pdf", mime="application/pdf"
+                )
+
+        elif action == "Add text watermark":
+            wm_text = st.text_input("Watermark text", "CONFIDENTIAL")
+            if st.button("Apply and download"):
+                for page in doc_pdf:
+                    rect = page.rect
+                    center = fitz.Point(rect.width / 2, rect.height / 2)
+                    # rotate diagonally around the page center using a morph matrix
+                    morph = (center, fitz.Matrix(45))
+                    page.insert_text(
+                        (rect.width / 4, rect.height / 2),
+                        wm_text,
+                        fontsize=40,
+                        color=(0.7, 0.7, 0.7),
+                        overlay=True,
+                        morph=morph,
+                    )
+                out = io.BytesIO(doc_pdf.tobytes())
+                st.download_button(
+                    "⬇️ Download watermarked PDF", data=out, file_name="watermarked.pdf", mime="application/pdf"
+                )
+
+        elif action == "Convert to editable Word (.docx)":
+            if st.button("Convert and download"):
+                from pdf2docx import Converter
+
+                with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_pdf:
+                    tmp_pdf.write(pdf_bytes)
+                    tmp_pdf_path = tmp_pdf.name
+                tmp_docx_path = tmp_pdf_path.replace(".pdf", ".docx")
+
+                with st.spinner("Converting (this keeps original layout/alignment)..."):
+                    cv = Converter(tmp_pdf_path)
+                    cv.convert(tmp_docx_path)
+                    cv.close()
+
+                with open(tmp_docx_path, "rb") as f:
+                    st.download_button(
+                        "⬇️ Download Word file",
+                        data=f.read(),
+                        file_name="converted_from_pdf.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    )
+                os.remove(tmp_pdf_path)
+                os.remove(tmp_docx_path)
 
 # ---------------------------------------------------------------------------
-# TAB 3: Universal Bulk Merge
+# TAB 3: Bulk Mail Merge (Excel + PDF template -> many personalized PDFs)
 # ---------------------------------------------------------------------------
 with tab3:
-    st.subheader("Bulk Document / Certificate / Offer Letter Generation")
-    st.write("Upload any blank layout background along with your custom Excel data to process mass files smoothly.")
-    
-    st.write("### 1. Download Demo Excel Data Structure")
-    is_offer = st.checkbox("Check here if generating Offer Letters (Changes data structure layout)", key="bulk_offer_toggle")
-    
-    def generate_demo_excel(offer_mode):
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "BulkData"
-        if offer_mode:
-            ws.append(["NAME", "ROLL_NO", "DEPARTMENT", "OFFER_DATE", "SALARY", "JOIN_DATE"])
-            ws.append(["AJAY K", "221AI005", "B.Sc. AIML", "07-July-2026", "Rs. 25,000", "01-August-2026"])
-        else:
-            ws.append(["NAME", "DEPARTMENT", "COURSE_NAME", "DURATION", "ROLL_NO"])
-            ws.append(["AJAY K", "B.Sc. AIML", "Cognitive Skills Enhancement - I", "June 2024 - November 2024", "221AI005"])
-        buf = io.BytesIO()
-        wb.save(buf)
-        buf.seek(0)
-        return buf.getvalue()
+    st.subheader("Generate hundreds/thousands of personalized letters at once")
 
-    demo_data = generate_demo_excel(is_offer)
-    st.download_button("⬇️ Download Sample Excel Template (.xlsx)", data=demo_data, file_name="handywriter_template.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="dl_demo_excel")
+    merge_mode = st.radio(
+        "Choose a method",
+        [
+            "Token-based ({{NAME}} placeholders in a PDF with real text)",
+            "Coordinate-based (works with ANY template — PDF or image, no placeholders needed)",
+        ],
+    )
 
-    st.markdown("---")
-    st.write("### 2. Upload Document Layout Template and Data Sheets")
-    
-    template_file = st.file_uploader("Upload Blank Template Image (PNG or JPG only)", type=["png", "jpg", "jpeg"], key="bulk_template_upload")
-    excel_file = st.file_uploader("Upload Student Excel Sheet (.xlsx)", type=["xlsx"], key="main_bulk_excel")
+    if merge_mode.startswith("Token-based"):
+        st.write(
+            "**Step 1:** Prepare your template PDF with placeholder tokens where "
+            "personal info should go — for example `{{NAME}}` and `{{DEPARTMENT}}`. "
+            "Tip: you can create these tokens using the **PDF Editor** tab above — "
+            "edit any real name/department in your existing offer letter and replace "
+            "it with a token like `{{NAME}}`, then save that as your template."
+        )
+        st.write(
+            "**Step 2:** Upload an Excel sheet where the column headers exactly match "
+            "your tokens (without the curly braces) — e.g. columns named `NAME`, "
+            "`DEPARTMENT`, `START_DATE`."
+        )
 
-    if template_file and excel_file:
-        base_image = Image.open(template_file).convert("RGB")
-        W, H = base_image.size
-        st.success(f"Template Loaded Successfully! Size: {W}x{H} Pixels.")
-        
-        wb = openpyxl.load_workbook(io.BytesIO(excel_file.read()))
-        ws = wb.active
-        headers = [c.value for c in ws[1] if c.value is not None]
-        rows = list(ws.iter_rows(min_row=2, values_only=True))
-        
-        st.info(f"Detected columns from Excel file: {', '.join(headers)}")
-        st.write(f"Total rows discovered: **{len(rows)}** records.")
-        
-        st.write("### 3. Coordinate Position Configuration Settings (X, Y Axes)")
-        
-        positions = {}
-        for index, h in enumerate(headers):
-            st.markdown(f"**⚙️ Position Strategy Configurations for column: `{{{{{h}}}}}`**")
-            cx, cy, cs, ca = st.columns([2, 2, 2, 2])
-            with cx:
-                x_pos = st.number_input(f"X (Horizontal Axis) - {h}", min_value=0, max_value=W, value=int(W/2), key=f"bx_{h}")
-            with cy:
-                y_pos = st.number_input(f"Y (Vertical Axis) - {h}", min_value=0, max_value=H, value=int(H/2) + (index * 70) - 100, key=f"by_{h}")
-            with cs:
-                f_size = st.number_input(f"Font Size Limit - {h}", min_value=10, max_value=200, value=32, key=f"bs_{h}")
-            with ca:
-                align_type = st.selectbox(f"Data Alignment Alignment Type - {h}", options=["Center", "Left"], key=f"ba_{h}")
-            
-            positions[h] = {"x": x_pos, "y": y_pos, "size": f_size, "align": align_type}
-            st.markdown("<br>", unsafe_with_html=True)
-            
-        name_col = st.selectbox("Select column header to use for individual document filenames:", options=headers, key="filename_select")
+        def _merge_one(template_bytes, replacements):
+            doc = fitz.open(stream=template_bytes, filetype="pdf")
+            for page in doc:
+                blocks = [b for b in page.get_text("blocks") if b[4].strip()]
+                text_dict = page.get_text("dict")
+                dict_blocks = text_dict["blocks"]
+                edits = []
+                for b in blocks:
+                    original = b[4]
+                    new_text = original
+                    changed = False
+                    for token, val in replacements.items():
+                        ph = "{{" + str(token) + "}}"
+                        if ph in new_text:
+                            new_text = new_text.replace(ph, str(val))
+                            changed = True
+                    if changed:
+                        bbox = fitz.Rect(b[:4])
+                        fontsize = 11
+                        for db in dict_blocks:
+                            for line in db.get("lines", []):
+                                for span in line["spans"]:
+                                    if fitz.Rect(span["bbox"]).intersects(bbox):
+                                        fontsize = span["size"]
+                        edits.append((bbox, new_text.rstrip("\n"), fontsize))
+                for bbox, new_text, fontsize in edits:
+                    page.add_redact_annot(bbox, fill=(1, 1, 1))
+                page.apply_redactions()
+                page_rect = page.rect
+                for bbox, new_text, fontsize in edits:
+                    padded = fitz.Rect(
+                        bbox.x0, bbox.y0,
+                        min(bbox.x0 + max(bbox.width, 300), page_rect.width - 36),
+                        bbox.y1,
+                    )
+                    padded.y1 = min(padded.y1 + fontsize * 4, page_rect.height - 36)
+                    size = fontsize
+                    rc = page.insert_textbox(padded, new_text, fontsize=size, fontname="helv")
+                    tries = 0
+                    while rc < 0 and size > 6 and tries < 8:
+                        size -= 1
+                        rc = page.insert_textbox(padded, new_text, fontsize=size, fontname="helv")
+                        tries += 1
+            return doc.tobytes()
 
-        if st.button(f"🚀 Mass Generate All {len(rows)} Custom PDF Files", key="run_bulk_engine"):
-            zip_buf = io.BytesIO()
-            progress = st.progress(0, text="Processing files dynamically...")
+        template_pdf = st.file_uploader("Upload template PDF (with {{TOKENS}})", type=["pdf"], key="mm_template")
+        excel_file = st.file_uploader("Upload Excel sheet (.xlsx)", type=["xlsx"], key="mm_excel")
 
-            with zipfile.ZipFile(zip_buf, "w") as zf:
-                for idx, row in enumerate(rows):
-                    rowdict = dict(zip(headers, row))
-                    img_copy = base_image.copy()
-                    draw = ImageDraw.Draw(img_copy)
-                    
-                    for h, pos in positions.items():
-                        text_val = str(rowdict.get(h, "") if rowdict.get(h) is not None else "")
-                        
-                        try:
-                            font = ImageFont.truetype("LiberationSans-Regular.ttf", pos["size"])
-                        except:
-                            try:
-                                font = ImageFont.truetype("DejaVuSans.ttf", pos["size"])
-                            except:
-                                font = ImageFont.load_default()
-                        
-                        left, top, right, bottom = draw.textbbox((0, 0), text_val, font=font)
-                        text_width = right - left
-                        
-                        if pos["align"] == "Center":
-                            final_x = pos["x"] - (text_width / 2)
+        if template_pdf and excel_file:
+            template_bytes = template_pdf.read()
+            wb = openpyxl.load_workbook(io.BytesIO(excel_file.read()))
+            ws = wb.active
+            headers = [c.value for c in ws[1]]
+            rows = list(ws.iter_rows(min_row=2, values_only=True))
+            st.info(f"Found **{len(rows)}** rows and columns: {', '.join(str(h) for h in headers)}")
+
+            folder_col = st.selectbox(
+                "Which column should be used to sort output into folders? (e.g. department)",
+                options=["(no folders — flat list)"] + [str(h) for h in headers],
+                key="tok_folder_col",
+            )
+            name_col = st.selectbox(
+                "Which column should be used to name each file? (e.g. name)",
+                options=[str(h) for h in headers],
+                key="tok_name_col",
+            )
+
+            if st.button(f"Generate all {len(rows)} personalized PDFs", key="tok_generate"):
+                zip_buf = io.BytesIO()
+                progress = st.progress(0, text="Generating...")
+                with zipfile.ZipFile(zip_buf, "w") as zf:
+                    for i, row in enumerate(rows):
+                        rowdict = dict(zip(headers, row))
+                        out_pdf = _merge_one(template_bytes, rowdict)
+                        fname = str(rowdict.get(name_col, f"row_{i+1}")).replace(" ", "_").replace("/", "-")
+                        if folder_col != "(no folders — flat list)":
+                            folder = str(rowdict.get(folder_col, "General")).replace(" ", "_").replace("/", "-")
+                            zf.writestr(f"{folder}/{fname}.pdf", out_pdf)
                         else:
-                            final_x = pos["x"]
-                            
-                        draw.text((final_x, pos["y"]), text_val, fill=(0, 0, 0), font=font)
-                    
-                    pdf_out = io.BytesIO()
-                    img_copy.save(pdf_out, format="PDF")
-                    
-                    fname = str(rowdict.get(name_col, f"file_{idx+1}")).replace(" ", "_").replace("/", "-")
-                    zf.writestr(f"{fname}.pdf", pdf_out.getvalue())
-                    
-                    progress.progress((idx + 1) / len(rows), text=f"Processed metadata item {idx+1}/{len(rows)}")
-                    
-            st.success("All dynamic file operations executed cleanly!")
-            st.download_button("⬇️ Download All Extracted Files as ZIP", data=zip_buf.getvalue(), file_name="bulk_generated_documents.zip", mime="application/zip", use_container_width=True, key="dl_bulk_zip")
+                            zf.writestr(f"{fname}.pdf", out_pdf)
+                        progress.progress((i + 1) / len(rows), text=f"Generated {i+1}/{len(rows)}")
+                st.success(f"Done! Generated {len(rows)} personalized PDFs.")
+                st.download_button(
+                    "⬇️ Download all as ZIP",
+                    data=zip_buf.getvalue(),
+                    file_name="personalized_letters.zip",
+                    mime="application/zip",
+                    key="tok_download",
+                )
+
+    else:
+        st.write(
+            "**Best for:** any certificate/offer letter, in any layout, when you don't "
+            "want to edit placeholder tokens into the file first. You upload the "
+            "template as-is (PDF or image), pick an X/Y spot for each field **once**, "
+            "and that exact same spot is used for all 2000 students — so the format "
+            "never has to match a fixed pattern, and there's no risk of misaligned text."
+        )
+
+        st.write("#### 1. Get a demo Excel sheet")
+        demo_headers = ["NAME", "DEPARTMENT", "COURSE_NAME", "DURATION"]
+        demo_row = ["AJAY K", "B.Sc. AIML", "Cognitive Skills Enhancement - I", "June 2024 - November 2024"]
+        _wb_demo = openpyxl.Workbook()
+        _ws_demo = _wb_demo.active
+        _ws_demo.title = "Students"
+        _ws_demo.append(demo_headers)
+        _ws_demo.append(demo_row)
+        _buf_demo = io.BytesIO()
+        _wb_demo.save(_buf_demo)
+        st.download_button(
+            "⬇️ Download demo Excel template (.xlsx)",
+            data=_buf_demo.getvalue(),
+            file_name="demo_student_data.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="coord_demo_download",
+        )
+        st.caption("Edit this file: keep the same column headers, add one row per student. You can add more columns too.")
+
+        st.write("#### 2. Upload your template and your real Excel sheet")
+        coord_template = st.file_uploader(
+            "Upload template (PDF or image — PNG/JPG)", type=["pdf", "png", "jpg", "jpeg"], key="coord_template"
+        )
+        coord_excel = st.file_uploader("Upload Excel sheet (.xlsx)", type=["xlsx"], key="coord_excel")
+
+        if coord_template and coord_excel:
+            # Get a base image of the template (render page 1 if PDF)
+            if coord_template.type == "application/pdf" or coord_template.name.lower().endswith(".pdf"):
+                _doc = fitz.open(stream=coord_template.read(), filetype="pdf")
+                _pix = _doc[0].get_pixmap(matrix=fitz.Matrix(2, 2))
+                base_image = Image.open(io.BytesIO(_pix.tobytes("png"))).convert("RGB")
+            else:
+                base_image = Image.open(coord_template).convert("RGB")
+
+            W, H = base_image.size
+            st.image(base_image, caption=f"Template preview ({W}×{H}px) — use these pixel coordinates below", width=500)
+
+            wb = openpyxl.load_workbook(io.BytesIO(coord_excel.read()))
+            ws = wb.active
+            headers = [c.value for c in ws[1] if c.value is not None]
+            rows = list(ws.iter_rows(min_row=2, values_only=True))
+            st.info(f"Found **{len(rows)}** rows and columns: {', '.join(str(h) for h in headers)}")
+
+            st.write("#### 3. Set the X/Y position for each field (same position used for every student)")
+            positions = {}
+            for idx, h in enumerate(headers):
+                st.markdown(f"**Field: `{h}`**")
+                cx, cy, cs, ca = st.columns(4)
+                with cx:
+                    x_pos = st.number_input(f"X — {h}", min_value=0, max_value=W, value=int(W * 0.3), key=f"cx_{h}")
+                with cy:
+                    y_pos = st.number_input(f"Y — {h}", min_value=0, max_value=H, value=int(H * 0.5) + idx * 40, key=f"cy_{h}")
+                with cs:
+                    f_size = st.number_input(f"Font size — {h}", min_value=8, max_value=200, value=28, key=f"cs_{h}")
+                with ca:
+                    align_type = st.selectbox(f"Align — {h}", options=["Left", "Center"], key=f"ca_{h}")
+                positions[h] = {"x": x_pos, "y": y_pos, "size": f_size, "align": align_type}
+
+            folder_col2 = st.selectbox(
+                "Sort output into folders by column? (optional)",
+                options=["(no folders — flat list)"] + [str(h) for h in headers],
+                key="coord_folder_col",
+            )
+            name_col2 = st.selectbox(
+                "Use which column to name each file?", options=[str(h) for h in headers], key="coord_name_col"
+            )
+
+            font_path = None
+            for candidate in [
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+            ]:
+                if os.path.exists(candidate):
+                    font_path = candidate
+                    break
+
+            if st.button(f"🚀 Generate all {len(rows)} personalized files", key="coord_generate"):
+                zip_buf = io.BytesIO()
+                progress = st.progress(0, text="Generating...")
+                with zipfile.ZipFile(zip_buf, "w") as zf:
+                    for i, row in enumerate(rows):
+                        rowdict = dict(zip(headers, row))
+                        img_copy = base_image.copy()
+                        draw = ImageDraw.Draw(img_copy)
+                        for h, pos in positions.items():
+                            text_val = str(rowdict.get(h, "") if rowdict.get(h) is not None else "")
+                            try:
+                                font = ImageFont.truetype(font_path, pos["size"]) if font_path else ImageFont.load_default()
+                            except Exception:
+                                font = ImageFont.load_default()
+                            left, top, right, bottom = draw.textbbox((0, 0), text_val, font=font)
+                            text_width = right - left
+                            final_x = pos["x"] - (text_width / 2) if pos["align"] == "Center" else pos["x"]
+                            draw.text((final_x, pos["y"]), text_val, fill=(0, 0, 0), font=font)
+
+                        pdf_out = io.BytesIO()
+                        img_copy.save(pdf_out, format="PDF")
+                        fname = str(rowdict.get(name_col2, f"file_{i+1}")).replace(" ", "_").replace("/", "-")
+                        if folder_col2 != "(no folders — flat list)":
+                            folder = str(rowdict.get(folder_col2, "General")).replace(" ", "_").replace("/", "-")
+                            zf.writestr(f"{folder}/{fname}.pdf", pdf_out.getvalue())
+                        else:
+                            zf.writestr(f"{fname}.pdf", pdf_out.getvalue())
+                        progress.progress((i + 1) / len(rows), text=f"Generated {i+1}/{len(rows)}")
+                st.success(f"Done! Generated {len(rows)} personalized files.")
+                st.download_button(
+                    "⬇️ Download all as ZIP",
+                    data=zip_buf.getvalue(),
+                    file_name="personalized_letters.zip",
+                    mime="application/zip",
+                    key="coord_download",
+                )
 
 st.divider()
-st.caption("HandyWriter Ultimate Pro · Secure Sandbox Local Instance Execution.")
+st.caption("HandyWriter · 100% free & open-source · Your files are processed locally, never uploaded anywhere.")
