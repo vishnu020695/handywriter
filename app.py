@@ -12,11 +12,11 @@ import openpyxl
 
 st.set_page_config(page_title="HandyWriter Ultimate", page_icon="✍️", layout="wide")
 st.title("✍️ HandyWriter Ultimate")
-st.caption("Clean Document Editor and Mass Sheet Processor — Optimized for long Offer Letters and Certificates.")
+st.caption("Universal Layout Mapping Engine — Zero Invisible Fonts, Zero Layout Stretches.")
 
 tab1, tab2, tab3 = st.tabs([
     "📝 Image → Word / Excel", 
-    "📄 Targeted Single PDF Editor", 
+    "📄 Targeted Single Document Editor", 
     "📬 Universal Bulk Merge"
 ])
 
@@ -65,76 +65,85 @@ with tab1:
                 st.download_button("⬇️ Download Excel file", data=buf, file_name="converted.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
 # ---------------------------------------------------------------------------
-# TAB 2: Targeted Single PDF Editor (No Wall of Boxes for Multi-page Files)
+# TAB 2: Image Canvas Single PDF/Image Editor (No Invisible Fonts)
 # ---------------------------------------------------------------------------
 with tab2:
-    st.subheader("🔍 Targeted Search & Edit Panel")
-    st.write("Perfect for long multi-page documents. Do not scroll through hundreds of boxes. Just type what text you want to alter.")
+    st.subheader("🔍 Canvas Overlay Single Editor")
+    st.write("Upload a PDF or an Image. This mode converts pages into a canvas background so your text overlays perfectly above lines at any scale.")
     
-    uploaded_pdf = st.file_uploader("Upload Single PDF / Offer Letter", type=["pdf"], key="pdf_upload_single")
-    if uploaded_pdf:
-        pdf_bytes = uploaded_pdf.read()
-        
-        st.write("### ✍️ Define Target Fields to Modify:")
-        
-        # Track active edits dynamically to prevent messy interface stacking
-        if "target_fields_count" not in st.session_state:
-            st.session_state.target_fields_count = 2
-
-        col_add, col_rem = st.columns(2)
-        with col_add:
-            if st.button("➕ Add Field to Edit", key="add_target_field"):
-                st.session_state.target_fields_count += 1
-                st.rerun()
-        with col_rem:
-            if st.button("🗑️ Remove Last Field", key="remove_target_field") and st.session_state.target_fields_count > 1:
-                st.session_state.target_fields_count -= 1
-                st.rerun()
-
-        edit_map = {}
-        for idx in range(st.session_state.target_fields_count):
-            st.markdown(f"**Target Modification Item #{idx+1}**")
-            c_find, c_replace = st.columns(2)
-            with c_find:
-                old_text = st.text_input(f"Text to Find (e.g., AJAY K):", key=f"target_f_{idx}")
-            with c_replace:
-                new_text = st.text_input(f"Change to (e.g., VISHNU):", key=f"target_r_{idx}")
+    single_file = st.file_uploader("Upload PDF or Image Layout Template", type=["pdf", "png", "jpg", "jpeg"], key="single_canvas_upload")
+    
+    if single_file:
+        # Load background layout smoothly whether it is a native image or a PDF page
+        if single_file.name.lower().endswith('.pdf'):
+            pdf_doc = fitz.open(stream=single_file.read(), filetype="pdf")
+            page_idx = st.number_input("Page number to edit:", min_value=1, max_value=pdf_doc.page_count, value=1, key="single_pdf_pg")
+            pix = pdf_doc[page_idx - 1].get_pixmap(matrix=fitz.Matrix(2.0, 2.0)) # high-res baseline conversion
+            base_image = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
+        else:
+            base_image = Image.open(single_file).convert("RGB")
             
-            if old_text.strip():
-                edit_map[old_text.strip()] = new_text.strip()
-
-        if st.button("🚀 Process & Download Document Layout", use_container_width=True, key="execute_single_target"):
-            if not edit_map:
-                st.warning("Please enter at least one text phrase to find and replace.")
-            else:
-                with st.spinner("Scanning pages and applying target changes layout-safely..."):
-                    doc_pdf = fitz.open(stream=pdf_bytes, filetype="pdf")
-                    
-                    for page in doc_pdf:
-                        for find_str, replace_str in edit_map.items():
-                            text_locations = page.search_for(find_str)
-                            for rect in text_locations:
-                                if rect.is_empty or rect.is_infinite or rect.width <= 0 or rect.height <= 0:
-                                    continue
-                                
-                                # Gather original text formatting layout parameters safely
-                                text_metrics = page.get_text("dict", clip=rect)
-                                fontsize = 12
-                                try:
-                                    fontsize = text_metrics["blocks"][0]["lines"][0]["spans"][0]["size"]
-                                except:
-                                    pass
-
-                                # Apply redaction block on top of the found text region
-                                page.add_redact_annot(rect, fill=(1, 1, 1))
-                                page.apply_redactions()
-                                
-                                # Re-inject modified data over layout coordinates with native Helvetica metrics
-                                page.insert_textbox(rect, replace_str, fontsize=fontsize, fontname="helv", align=0)
-                    
-                    out_pdf = io.BytesIO(doc_pdf.tobytes())
-                    st.success("Target operations successfully applied across all document pages!")
-                    st.download_button("⬇️ Download Final PDF Document", data=out_pdf, file_name="handywriter_edited.pdf", mime="application/pdf", use_container_width=True)
+        W, H = base_image.size
+        st.success(f"Layout Template Rendered! Canvas Area Dimensions: {W}x{H} Pixels.")
+        
+        # Setup session variables dynamically
+        if "single_fields_count" not in st.session_state:
+            st.session_state.single_fields_count = 2
+            
+        col_s_add, col_s_rem = st.columns(2)
+        with col_s_add:
+            if st.button("➕ Add Custom Text Layer Field", key="add_s_field"):
+                st.session_state.single_fields_count += 1
+                st.rerun()
+        with col_s_rem:
+            if st.button("🗑️ Remove Last Layer Field", key="rem_s_field") and st.session_state.single_fields_count > 1:
+                st.session_state.single_fields_count -= 1
+                st.rerun()
+                
+        st.write("### ⚙️ Position Configuration Settings & Value Inputs")
+        layers_map = {}
+        for idx in range(st.session_state.single_fields_count):
+            st.markdown(f"**Custom Field Element #{idx+1}**")
+            cx, cy, cs, ca, ct = st.columns([2, 2, 1.5, 2, 4.5])
+            with cx:
+                x_pos = st.number_input(f"X (Horizontal)", min_value=0, max_value=W, value=int(W/2), key=f"s_x_{idx}")
+            with cy:
+                y_pos = st.number_input(f"Y (Vertical)", min_value=0, max_value=H, value=int(H/2) + (idx * 80) - 100, key=f"s_y_{idx}")
+            with cs:
+                f_size = st.number_input(f"Font Size", min_value=10, max_value=200, value=36, key=f"s_s_{idx}")
+            with ca:
+                align_type = st.selectbox(f"Align Type", options=["Center", "Left"], key=f"s_a_{idx}")
+            with ct:
+                text_val = st.text_input(f"Text String Value:", value=f"Sample Field Text #{idx+1}", key=f"s_t_{idx}")
+                
+            layers_map[idx] = {"x": x_pos, "y": y_pos, "size": f_size, "align": align_type, "text": text_val.strip()}
+            st.markdown("<br>", unsafe_with_html=True)
+            
+        if st.button("🚀 Render Canvas & Download Document", use_container_width=True, key="process_single_canvas"):
+            img_copy = base_image.copy()
+            draw = ImageDraw.Draw(img_copy)
+            
+            for idx, data in layers_map.items():
+                if not data["text"]:
+                    continue
+                try:
+                    font = ImageFont.truetype("LiberationSans-Regular.ttf", data["size"])
+                except:
+                    try:
+                        font = ImageFont.truetype("DejaVuSans.ttf", data["size"])
+                    except:
+                        font = ImageFont.load_default()
+                        
+                left, top, right, bottom = draw.textbbox((0, 0), data["text"], font=font)
+                text_width = right - left
+                
+                final_x = data["x"] - (text_width / 2) if data["align"] == "Center" else data["x"]
+                draw.text((final_x, data["y"]), data["text"], fill=(0, 0, 0), font=font)
+                
+            pdf_out = io.BytesIO()
+            img_copy.save(pdf_out, format="PDF")
+            st.success("Document text compiled with 100% visibility scaling!")
+            st.download_button("⬇️ Download Final Document PDF", data=pdf_out.getvalue(), file_name="canvas_output.pdf", mime="application/pdf", use_container_width=True)
 
 # ---------------------------------------------------------------------------
 # TAB 3: Universal Bulk Merge
