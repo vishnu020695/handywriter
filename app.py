@@ -12,9 +12,9 @@ import openpyxl
 
 st.set_page_config(page_title="HandyWriter Ultimate", page_icon="✍️", layout="wide")
 st.title("✍️ HandyWriter Ultimate")
-st.caption("Certificates, Offer Letters, Letters என 2000+ மாணவர்களின் அனைத்து ஃபார்மட்களையும் அலைன்மென்ட் மாறாமல் பல்க்காக தயாரிக்கும் ஒரே கருவி.")
+st.caption("Certificates, 4-Page Offer Letters, Documents என எதை வேண்டுமானாலும் எரர் மற்றும் அலைன்மென்ட் பிழையின்றி மாற்றும் ஒரே டூல்.")
 
-tab1, tab2, tab3 = st.tabs(["📝 Image → Word / Excel", "📄 Single PDF Editor", "📬 Universal Bulk Merge (All Formats)"])
+tab1, tab2, tab3 = st.tabs(["📝 Image → Word / Excel", "📄 Intelligent PDF Editor (No Boxes)", "📬 Universal Bulk Merge (All Formats)"])
 
 # ---------------------------------------------------------------------------
 # TAB 1: Image -> Word / Excel
@@ -61,67 +61,77 @@ with tab1:
                 st.download_button("⬇️ Download Excel file", data=buf, file_name="converted.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
 # ---------------------------------------------------------------------------
-# TAB 2: Single PDF Editor
+# TAB 2: Intelligent PDF Editor (நூற்றுக்கணக்கான பெட்டிகள் இல்லாத ஸ்மார்ட் எடிட்டர்)
 # ---------------------------------------------------------------------------
 with tab2:
-    st.subheader("ஒற்றை PDF / ஆஃபர் லெட்டரில் எதை வேண்டுமானாலும் திருத்திக் கொள்ளும் வசதி")
-    uploaded_pdf = st.file_uploader("Upload Single PDF / Offer Letter", type=["pdf"], key="pdf_upload_single")
+    st.subheader("🔍 தேடித் திருத்தும் ஸ்மார்ட் PDF எடிட்டர் (ஆஃபர் லெட்டர்களுக்கு மிகச்சிறந்தது)")
+    st.write("PDF-ல் உள்ள நூற்றுக்கணக்கான பெட்டிகளைத் தேடத் தேவையில்லை. எந்த வார்த்தையை மாற்ற வேண்டுமோ அதை மட்டும் கீழே கொடுத்து மாற்றிக் கொள்ளலாம்.")
+    
+    uploaded_pdf = st.file_uploader("Upload Single PDF / Scanned Offer Letter", type=["pdf"], key="pdf_upload_single")
     if uploaded_pdf:
         pdf_bytes = uploaded_pdf.read()
         doc_pdf = fitz.open(stream=pdf_bytes, filetype="pdf")
-        st.info(f"Loaded PDF with {doc_pdf.page_count} pages.")
+        st.success(f"Loaded PDF with {doc_pdf.page_count} pages.")
         
-        page_num = st.number_input("Page number to edit", min_value=1, max_value=doc_pdf.page_count, value=1, key="s_page")
-        page = doc_pdf[page_num - 1]
+        st.write("### ✍️ எடிட் செய்ய வேண்டிய விபரங்கள் (நீங்கள் எத்தனை வரிகள் வேண்டுமானாலும் மாற்றலாம்):")
         
-        raw_blocks = page.get_text("blocks")
-        blocks = [b for b in raw_blocks if b[4].strip()]
-        
-        zoom = 1.3
-        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
-        preview_img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
-        draw = ImageDraw.Draw(preview_img)
-        for i, b in enumerate(blocks):
-            x0, y0, x1, y1 = [v * zoom for v in b[:4]]
-            draw.rectangle([x0, y0, x1, y1], outline="red", width=2)
-            draw.text((x0, max(0, y0 - 14)), f"#{i + 1}", fill="red")
-        st.image(preview_img, caption="PDF Preview with Box Numbers", width=500)
-        
-        if not blocks:
-            st.warning("No text blocks found.")
-        else:
-            st.write("### 📝 கீழே உள்ள பெட்டிகளில் எதை வேண்டுமானாலும் மாற்றி அமைத்துக் கொள்ளலாம்:")
-            edited_values = []
-            for i, b in enumerate(blocks):
-                val = st.text_area(f"Box #{i + 1} (Original: {b[4].strip()[:30]}...)", b[4].rstrip("\n"), height=80, key=f"sb_{i}")
-                edited_values.append(val)
-                
-            if st.button("Apply and Download Single PDF"):
-                text_dict = page.get_text("dict")
-                dict_blocks = text_dict["blocks"]
-                
-                for i, (b, new_val) in enumerate(zip(blocks, edited_values)):
-                    if new_val != b[4].rstrip("\n"):
-                        bbox = fitz.Rect(b[:4])
-                        
-                        fontsize = 11
-                        for db in dict_blocks:
-                            for line in db.get("lines", []):
-                                for span in line["spans"]:
-                                    if fitz.Rect(span["bbox"]).intersects(bbox):
-                                        fontsize = span["size"]
-                                        break
-                        
-                        page.add_redact_annot(bbox, fill=(1, 1, 1))
-                        page.apply_redactions()
-                        page.insert_textbox(bbox, new_val, fontsize=fontsize, fontname="helv")
-                
-                out = io.BytesIO(doc_pdf.tobytes())
-                st.success("மாற்றங்கள் வெற்றிகரமாகச் சேர்க்கப்பட்டன!")
-                st.download_button("⬇️ Download Edited PDF", data=out, file_name="edited.pdf", mime="application/pdf")
+        # Dynamic Search and Replace fields using Streamlit session state
+        if "replacements_count" not in st.session_state:
+            st.session_state.replacements_count = 2
+
+        col_btn1, col_btn2 = st.columns(2)
+        with col_btn1:
+            if st.button("➕ இன்னும் ஒரு வார்த்தையை மாற்ற வேண்டுமா? (Add Word)"):
+                st.session_state.replacements_count += 1
+                st.rerun()
+        with col_btn2:
+            if st.button("🗑️ கடைசியாக சேர்த்ததை நீக்கு (Remove)") and st.session_state.replacements_count > 1:
+                st.session_state.replacements_count -= 1
+                st.rerun()
+
+        change_dict = {}
+        for idx in range(st.session_state.replacements_count):
+            st.markdown(f"**வார்த்தை #{idx+1}**")
+            c_find, c_replace = st.columns(2)
+            with c_find:
+                find_txt = st.text_input(f"மாற்ற வேண்டிய பழைய வார்த்தை (எ.கா: AJAY K அல்லது B.Sc. AIML):", key=f"f_{idx}")
+            with c_replace:
+                replace_txt = st.text_input(f"வர வேண்டிய புதிய வார்த்தை (எ.கா: VISHNU அல்லது B.Com):", key=f"r_{idx}")
+            
+            if find_txt.strip():
+                change_dict[find_txt.strip()] = replace_txt.strip()
+
+        if st.button("🚀 Apply Changes and Download PDF", use_container_width=True):
+            if not change_dict:
+                st.warning("மாற்றுவதற்கு எந்த வார்த்தையையும் நீங்கள் உள்ளிடவில்லை.")
+            else:
+                with st.spinner("ஆவணத்தில் உள்ள வரிகளைத் தேடி மாற்றியமைக்கிறது..."):
+                    for page in doc_pdf:
+                        for find_str, replace_str in change_dict.items():
+                            # Find the exact text location in PDF coordinates
+                            text_instances = page.search_for(find_str)
+                            for rect in text_instances:
+                                # Get exact font details before wiping out
+                                text_dict = page.get_text("dict", clip=rect)
+                                fontsize = 11
+                                try:
+                                    fontsize = text_dict["blocks"][0]["lines"][0]["spans"][0]["size"]
+                                except:
+                                    pass
+
+                                # 1. Wipe out the old text cleanly
+                                page.add_redact_annot(rect, fill=(1, 1, 1))
+                                page.apply_redactions()
+                                
+                                # 2. Overlay new text on top of the original coordinate box perfectly
+                                page.insert_textbox(rect, replace_str, fontsize=fontsize, fontname="helv", align=1)
+                    
+                    out_pdf = io.BytesIO(doc_pdf.tobytes())
+                    st.success("அனைத்து பக்கங்களிலும் மாற்றங்கள் வெற்றிகரமாகச் செய்யப்பட்டன!")
+                    st.download_button("⬇️ Download Final Edited PDF", data=out_pdf, file_name="perfect_edited.pdf", mime="application/pdf", use_container_width=True)
 
 # ---------------------------------------------------------------------------
-# TAB 3: Universal Bulk Merge (Error பிக்ஸ் செய்யப்பட்டுள்ளது)
+# TAB 3: Universal Bulk Merge (Fixed Engine)
 # ---------------------------------------------------------------------------
 with tab3:
     st.subheader("2000+ மாணவர்களின் சான்றிதழ் / ஆஃபர் லெட்டர் பல்க் தயாரிப்பு")
@@ -130,7 +140,6 @@ with tab3:
     st.write("### 1. மாதிரி எக்செல் கோப்பு (Demo Template)")
     is_offer = st.checkbox("ஆஃபர் லெட்டருக்கான மாதிரி எக்செல் தேவையா? (Check for Offer Letter Template)")
     
-    # AttributeError எரர் வராமல் தடுக்க ஃபங்க்ஷனாக மாற்றப்பட்ட பகுதி
     def generate_demo_excel(offer_mode):
         wb = openpyxl.Workbook()
         ws = wb.active
@@ -147,16 +156,10 @@ with tab3:
         return buf.getvalue()
 
     demo_data = generate_demo_excel(is_offer)
-    st.download_button(
-        "⬇️ Download Sample Excel Template (.xlsx)", 
-        data=demo_data, 
-        file_name="handywriter_template.xlsx", 
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    st.download_button("⬇️ Download Sample Excel Template (.xlsx)", data=demo_data, file_name="handywriter_template.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
     st.markdown("---")
     st.write("### 2. ஆவணத்தின் வெற்றுப் படம் மற்றும் எக்செல் அப்லோடு")
-    st.info("குறிப்பு: பிளாங்க் டெம்ப்ளேட்டை இமேஜ் (PNG/JPG) வடிவில் பதிவேற்றவும்.")
     
     template_file = st.file_uploader("Upload Blank Template Image (PNG or JPG only)", type=["png", "jpg", "jpeg"])
     excel_file = st.file_uploader("Upload Student Excel Sheet (.xlsx)", type=["xlsx"], key="main_bulk_excel")
@@ -171,10 +174,7 @@ with tab3:
         headers = [c.value for c in ws[1] if c.value is not None]
         rows = list(ws.iter_rows(min_row=2, values_only=True))
         
-        st.info(f"எக்செல் ஷீட்டில் கண்டறியப்பட்ட பத்திகள் (Columns): {', '.join(headers)}")
-        st.write(f"மொத்தம் **{len(rows)}** மாணவர்களின் விபரங்கள் உள்ளன.")
-        
-        st.write("### 3. അлайнமென்ட் செட்டிங்ஸ் (X, Y Coordinates for EVERY Column)")
+        st.info(f"Columns found: {', '.join(headers)}")
         
         positions = {}
         for index, h in enumerate(headers):
@@ -233,7 +233,7 @@ with tab3:
                     
                     progress.progress((idx + 1) / len(rows), text=f"Generated {idx+1}/{len(rows)}")
                     
-            st.success("அனைத்து ஆவணங்களும் எரர் இல்லாமல் வெற்றிகரமாகத் தயார் செய்யப்பட்டுவிட்டன!")
+            st.success("அனைத்து ஆவணங்களும் வெற்றிகரமாகத் தயார் செய்யப்பட்டுவிட்டன!")
             st.download_button("⬇️ Download All PDFs as ZIP", data=zip_buf.getvalue(), file_name="bulk_custom_documents.zip", mime="application/zip", use_container_width=True)
 
 st.divider()
