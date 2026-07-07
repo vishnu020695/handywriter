@@ -12,11 +12,11 @@ import openpyxl
 
 st.set_page_config(page_title="HandyWriter Ultimate", page_icon="✍️", layout="wide")
 st.title("✍️ HandyWriter Ultimate")
-st.caption("Visual Document Editor and Bulk PDF Engine — No Invisible Font or Alignment Crashes.")
+st.caption("Clean Document Editor and Mass Sheet Processor — Optimized for long Offer Letters and Certificates.")
 
 tab1, tab2, tab3 = st.tabs([
     "📝 Image → Word / Excel", 
-    "📄 Visual Single PDF Editor", 
+    "📄 Targeted Single PDF Editor", 
     "📬 Universal Bulk Merge"
 ])
 
@@ -65,78 +65,76 @@ with tab1:
                 st.download_button("⬇️ Download Excel file", data=buf, file_name="converted.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
 # ---------------------------------------------------------------------------
-# TAB 2: Visual Single PDF Editor (Fixed Bounding Box Rendering & Native Font Scaling)
+# TAB 2: Targeted Single PDF Editor (No Wall of Boxes for Multi-page Files)
 # ---------------------------------------------------------------------------
 with tab2:
-    st.subheader("📄 Visual Layout Mapping Editor")
-    st.write("Upload your template PDF file. Map text blocks using target numbers to directly type replacements without disrupting surrounding lines.")
+    st.subheader("🔍 Targeted Search & Edit Panel")
+    st.write("Perfect for long multi-page documents. Do not scroll through hundreds of boxes. Just type what text you want to alter.")
     
     uploaded_pdf = st.file_uploader("Upload Single PDF / Offer Letter", type=["pdf"], key="pdf_upload_single")
     if uploaded_pdf:
         pdf_bytes = uploaded_pdf.read()
-        doc_pdf = fitz.open(stream=pdf_bytes, filetype="pdf")
-        st.info(f"Loaded PDF Document with {doc_pdf.page_count} page(s).")
         
-        page_num = st.number_input("Select page number to view and modify:", min_value=1, max_value=doc_pdf.page_count, value=1, key="s_page")
-        page = doc_pdf[page_num - 1]
+        st.write("### ✍️ Define Target Fields to Modify:")
         
-        # Pull text blocks 
-        raw_blocks = page.get_text("blocks")
-        blocks = [b for b in raw_blocks if b[4].strip()]
-        
-        # Render a high-resolution display overlay map to visually locate layout sections
-        zoom = 1.5
-        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
-        preview_img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
-        draw_map = ImageDraw.Draw(preview_img)
-        
-        for i, b in enumerate(blocks):
-            x0, y0, x1, y1 = [v * zoom for v in b[:4]]
-            draw_map.rectangle([x0, y0, x1, y1], outline="blue", width=2)
-            draw_map.text((x0, max(0, y0 - 15)), f"#{i + 1}", fill="blue")
+        # Track active edits dynamically to prevent messy interface stacking
+        if "target_fields_count" not in st.session_state:
+            st.session_state.target_fields_count = 2
+
+        col_add, col_rem = st.columns(2)
+        with col_add:
+            if st.button("➕ Add Field to Edit", key="add_target_field"):
+                st.session_state.target_fields_count += 1
+                st.rerun()
+        with col_rem:
+            if st.button("🗑️ Remove Last Field", key="remove_target_field") and st.session_state.target_fields_count > 1:
+                st.session_state.target_fields_count -= 1
+                st.rerun()
+
+        edit_map = {}
+        for idx in range(st.session_state.target_fields_count):
+            st.markdown(f"**Target Modification Item #{idx+1}**")
+            c_find, c_replace = st.columns(2)
+            with c_find:
+                old_text = st.text_input(f"Text to Find (e.g., AJAY K):", key=f"target_f_{idx}")
+            with c_replace:
+                new_text = st.text_input(f"Change to (e.g., VISHNU):", key=f"target_r_{idx}")
             
-        st.image(preview_img, caption="Document Structural Reference Layout Map", width=650)
-        
-        if not blocks:
-            st.warning("No dynamic structural text boxes detected on this layout page.")
-        else:
-            st.write("### 📝 Modify Target Text Inputs Below:")
-            edited_values = []
-            
-            # Form grid configuration split for structured input tracking
-            for i, b in enumerate(blocks):
-                original_sample = b[4].strip()
-                val = st.text_input(f"Block Box #{i + 1} (Current: '{original_sample[:60]}')", value=b[4].rstrip("\n"), key=f"sb_val_{i}")
-                edited_values.append(val)
-                
-            if st.button("💾 Apply Dynamic Updates & Export PDF", use_container_width=True):
-                text_dict = page.get_text("dict")
-                dict_blocks = text_dict["blocks"]
-                
-                for i, (b, new_val) in enumerate(zip(blocks, edited_values)):
-                    if new_val != b[4].rstrip("\n"):
-                        bbox = fitz.Rect(b[:4])
-                        
-                        # Dynamically discover font metrics from layout structure
-                        fontsize = 12
-                        for db in dict_blocks:
-                            for line in db.get("lines", []):
-                                for span in line["spans"]:
-                                    if fitz.Rect(span["bbox"]).intersects(bbox):
-                                        fontsize = span["size"]
-                                        break
-                        
-                        # Execute a layout boundary check to safeguard against empty render parameters
-                        if bbox.width > 0 and bbox.height > 0:
-                            page.add_redact_annot(bbox, fill=(1, 1, 1))
-                            page.apply_redactions()
-                            
-                            # Using native PDF core font sets ('helv' for Helvetica) scales flawlessly to any text box width
-                            page.insert_textbox(bbox, new_val, fontsize=fontsize, fontname="helv", align=0)
-                
-                out = io.BytesIO(doc_pdf.tobytes())
-                st.success("Document template populated and compiled successfully!")
-                st.download_button("⬇|️ Download Final PDF Document", data=out, file_name="handywriter_output.pdf", mime="application/pdf", use_container_width=True)
+            if old_text.strip():
+                edit_map[old_text.strip()] = new_text.strip()
+
+        if st.button("🚀 Process & Download Document Layout", use_container_width=True, key="execute_single_target"):
+            if not edit_map:
+                st.warning("Please enter at least one text phrase to find and replace.")
+            else:
+                with st.spinner("Scanning pages and applying target changes layout-safely..."):
+                    doc_pdf = fitz.open(stream=pdf_bytes, filetype="pdf")
+                    
+                    for page in doc_pdf:
+                        for find_str, replace_str in edit_map.items():
+                            text_locations = page.search_for(find_str)
+                            for rect in text_locations:
+                                if rect.is_empty or rect.is_infinite or rect.width <= 0 or rect.height <= 0:
+                                    continue
+                                
+                                # Gather original text formatting layout parameters safely
+                                text_metrics = page.get_text("dict", clip=rect)
+                                fontsize = 12
+                                try:
+                                    fontsize = text_metrics["blocks"][0]["lines"][0]["spans"][0]["size"]
+                                except:
+                                    pass
+
+                                # Apply redaction block on top of the found text region
+                                page.add_redact_annot(rect, fill=(1, 1, 1))
+                                page.apply_redactions()
+                                
+                                # Re-inject modified data over layout coordinates with native Helvetica metrics
+                                page.insert_textbox(rect, replace_str, fontsize=fontsize, fontname="helv", align=0)
+                    
+                    out_pdf = io.BytesIO(doc_pdf.tobytes())
+                    st.success("Target operations successfully applied across all document pages!")
+                    st.download_button("⬇️ Download Final PDF Document", data=out_pdf, file_name="handywriter_edited.pdf", mime="application/pdf", use_container_width=True)
 
 # ---------------------------------------------------------------------------
 # TAB 3: Universal Bulk Merge
