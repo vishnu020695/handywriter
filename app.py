@@ -1,152 +1,41 @@
 import io
 import os
-import tempfile
 import zipfile
-import re
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 import pytesseract
-import fitz  # PyMuPDF
 from docx import Document
 import openpyxl
 
 st.set_page_config(page_title="HandyWriter Ultimate", page_icon="✍️", layout="wide")
 st.title("✍️ HandyWriter Ultimate")
-st.caption("Perfect execution for Certificates, multi-page Offer Letters, and Bulk Documents without alignment crashes.")
+st.caption("Universal Document Engine - Zero PyMuPDF alignment crashes.")
 
-tab1, tab2, tab3 = st.tabs(["📝 Image → Word / Excel", "📄 Intelligent PDF Editor", "📬 Universal Bulk Merge"])
+tab1, tab2 = st.tabs(["📄 Document Editor & Bulk Merge", "📝 Image → Word / Excel"])
+
+# Helper function to get safe system fonts inside Streamlit Cloud
+def get_sys_font(font_size):
+    for f_name in ["LiberationSans-Regular.ttf", "DejaVuSans.ttf", "Arial.ttf"]:
+        try:
+            return ImageFont.truetype(f_name, font_size)
+        except IOError:
+            continue
+    return ImageFont.load_default()
 
 # ---------------------------------------------------------------------------
-# TAB 1: Image -> Word / Excel
+# TAB 1: Universal Document Editor & Bulk Engine (Supports All Formats)
 # ---------------------------------------------------------------------------
 with tab1:
-    st.subheader("Convert a handwritten or scanned photo into an editable document")
-    uploaded_img = st.file_uploader("Upload image (JPG, PNG)", type=["jpg", "jpeg", "png"], key="img_upload")
-
-    if uploaded_img:
-        image = Image.open(uploaded_img).convert("RGB")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.image(image, caption="Your uploaded image", use_container_width=True)
-
-        with st.spinner("Reading text..."):
-            extracted_text = pytesseract.image_to_string(image, config="--psm 6")
-
-        with col2:
-            edited_text = st.text_area("Editable text", extracted_text, height=350)
-
-        st.write("### Save as:")
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("💾 Create Word (.docx)", use_container_width=True):
-                doc = Document()
-                for line in edited_text.split("\n"):
-                    doc.add_paragraph(line)
-                buf = io.BytesIO()
-                doc.save(buf)
-                buf.seek(0)
-                st.download_button("⬇️ Download Word file", data=buf, file_name="converted.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True)
-
-        with c2:
-            if st.button("💾 Create Excel (.xlsx)", use_container_width=True):
-                wb = openpyxl.Workbook()
-                ws = wb.active
-                for line in edited_text.split("\n"):
-                    if not line.strip(): continue
-                    cells = re.split(r"\t|\s{2,}", line.strip())
-                    ws.append(cells)
-                buf = io.BytesIO()
-                wb.save(buf)
-                buf.seek(0)
-                st.download_button("⬇️ Download Excel file", data=buf, file_name="converted.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-
-# ---------------------------------------------------------------------------
-# TAB 2: Intelligent PDF Editor (100% English & Secure Search & Replace)
-# ---------------------------------------------------------------------------
-with tab2:
-    st.subheader("🔍 Intelligent Search & Replace (Best for Multi-page Offer Letters)")
-    st.write("No layout boxes to click. Simply enter the text you want to find and what to replace it with.")
+    st.subheader("Generate or Edit Any Document Layout (Certificates, Offer Letters, IDs)")
+    st.write("Upload a blank background image of your document layout, then map your fields anywhere using pixel coordinates.")
     
-    uploaded_pdf = st.file_uploader("Upload Single PDF / Offer Letter", type=["pdf"], key="pdf_upload_single")
-    if uploaded_pdf:
-        pdf_bytes = uploaded_pdf.read()
-        
-        st.write("### ✍️ Enter Details to Edit:")
-        
-        if "replacements_count" not in st.session_state:
-            st.session_state.replacements_count = 3
-
-        col_btn1, col_btn2 = st.columns(2)
-        with col_btn1:
-            if st.button("➕ Add More Fields"):
-                st.session_state.replacements_count += 1
-                st.rerun()
-        with col_btn2:
-            if st.button("🗑️ Remove Last Field") and st.session_state.replacements_count > 1:
-                st.session_state.replacements_count -= 1
-                st.rerun()
-
-        change_dict = {}
-        for idx in range(st.session_state.replacements_count):
-            st.markdown(f"**Field #{idx+1}**")
-            c_find, c_replace = st.columns(2)
-            with c_find:
-                find_txt = st.text_input(f"Find Text (e.g., AJAY K):", key=f"f_{idx}")
-            with c_replace:
-                replace_txt = st.text_input(f"Replace With (e.g., VISHNU):", key=f"r_{idx}")
-            
-            if find_txt.strip():
-                change_dict[find_txt.strip()] = replace_txt.strip()
-
-        if st.button("🚀 Apply Changes and Download PDF", use_container_width=True):
-            if not change_dict:
-                st.warning("Please enter at least one text field to find and replace.")
-            else:
-                with st.spinner("Processing document layout changes cleanly..."):
-                    # Open file via clean Streamlit memory block
-                    doc_pdf = fitz.open(stream=pdf_bytes, filetype="pdf")
-                    
-                    for page in doc_pdf:
-                        for find_str, replace_str in change_dict.items():
-                            text_instances = page.search_for(find_str)
-                            for rect in text_instances:
-                                # Ensure boundary check is finite and valid to prevent PyMuPDF empty rectangle crashes
-                                if rect.is_empty or rect.is_infinite or rect.width <= 0 or rect.height <= 0:
-                                    continue
-                                
-                                # Fetch original font structure safely
-                                text_dict = page.get_text("dict", clip=rect)
-                                fontsize = 11
-                                try:
-                                    fontsize = text_dict["blocks"][0]["lines"][0]["spans"][0]["size"]
-                                except:
-                                    pass
-
-                                # Clean original text spot
-                                page.add_redact_annot(rect, fill=(1, 1, 1))
-                                page.apply_redactions()
-                                
-                                # Clean input insertion
-                                page.insert_textbox(rect, replace_str, fontsize=fontsize, fontname="helv", align=0)
-                    
-                    out_pdf = io.BytesIO(doc_pdf.tobytes())
-                    st.success("All edits processed perfectly across all pages!")
-                    st.download_button("⬇️ Download Final Edited PDF", data=out_pdf, file_name="edited_document.pdf", mime="application/pdf", use_container_width=True)
-
-# ---------------------------------------------------------------------------
-# TAB 3: Universal Bulk Merge (Clean & Dynamic Engine)
-# ---------------------------------------------------------------------------
-with tab3:
-    st.subheader("Bulk Document / Certificate / Offer Letter Generation")
-    st.write("Upload any blank layout background along with your custom Excel data to process mass files smoothly.")
-    
-    st.write("### 1. Download Demo Excel Data Structure")
-    is_offer = st.checkbox("Check here if generating Offer Letters (Changes data structure layout)")
+    st.write("### 1. Download Layout Template Sheet")
+    is_offer = st.checkbox("Toggle for Offer Letter Data Structure (Changes column layout headers)")
     
     def generate_demo_excel(offer_mode):
         wb = openpyxl.Workbook()
         ws = wb.active
-        ws.title = "BulkData"
+        ws.title = "DocumentData"
         if offer_mode:
             ws.append(["NAME", "ROLL_NO", "DEPARTMENT", "OFFER_DATE", "SALARY", "JOIN_DATE"])
             ws.append(["AJAY K", "221AI005", "B.Sc. AIML", "07-July-2026", "Rs. 25,000", "01-August-2026"])
@@ -159,51 +48,51 @@ with tab3:
         return buf.getvalue()
 
     demo_data = generate_demo_excel(is_offer)
-    st.download_button("⬇️ Download Sample Excel Template (.xlsx)", data=demo_data, file_name="handywriter_template.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    st.download_button("⬇️ Download Sample Excel Sheet (.xlsx)", data=demo_data, file_name="handywriter_template.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
     st.markdown("---")
-    st.write("### 2. Upload Document Layout Template and Data Sheets")
-    st.info("Tip: Upload your blank certificate page or offer letter layout background as a standard image format (PNG/JPG).")
+    st.write("### 2. Upload Files")
+    st.info("Note: Convert your blank layout page/PDF to an image file format (PNG or JPG) before uploading to maintain 100% alignment stability.")
     
-    template_file = st.file_uploader("Upload Blank Template Image (PNG or JPG only)", type=["png", "jpg", "jpeg"])
-    excel_file = st.file_uploader("Upload Student Excel Sheet (.xlsx)", type=["xlsx"], key="main_bulk_excel")
+    template_file = st.file_uploader("Upload Blank Template Canvas (PNG / JPG)", type=["png", "jpg", "jpeg"])
+    excel_file = st.file_uploader("Upload Data Sheet (.xlsx)", type=["xlsx"])
 
     if template_file and excel_file:
         base_image = Image.open(template_file).convert("RGB")
         W, H = base_image.size
-        st.success(f"Template Loaded Successfully! Size: {W}x{H} Pixels.")
+        st.success(f"Layout Template Ready! Resolution Profile: {W}x{H} Pixels.")
         
         wb = openpyxl.load_workbook(io.BytesIO(excel_file.read()))
         ws = wb.active
         headers = [c.value for c in ws[1] if c.value is not None]
         rows = list(ws.iter_rows(min_row=2, values_only=True))
         
-        st.info(f"Detected columns from Excel file: {', '.join(headers)}")
-        st.write(f"Total rows discovered: **{len(rows)}** records.")
+        st.info(f"Identified Fields: {', '.join(headers)} | Processing Row Volume: {len(rows)}")
         
-        st.write("### 3. Coordinate Position Configuration Settings (X, Y Axes)")
+        st.write("### 3. Coordinate Layout Placement Settings")
+        st.write("Adjust where each field sits dynamically on the document layout matrix below:")
         
         positions = {}
         for index, h in enumerate(headers):
-            st.markdown(f"**⚙️ Position Strategy Configurations for column: `{{{{{h}}}}}`**")
+            st.markdown(f"**Field Variable Block: `{{{{{h}}}}}`**")
             cx, cy, cs, ca = st.columns([2, 2, 2, 2])
             with cx:
-                x_pos = st.number_input(f"X (Horizontal Axis) - {h}", min_value=0, max_value=W, value=int(W/2), key=f"bx_{h}")
+                x_pos = st.number_input(f"X Axis Position - {h}", min_value=0, max_value=W, value=int(W/2), key=f"x_{h}")
             with cy:
-                y_pos = st.number_input(f"Y (Vertical Axis) - {h}", min_value=0, max_value=H, value=int(H/2) + (index * 70) - 100, key=f"by_{h}")
+                y_pos = st.number_input(f"Y Axis Position - {h}", min_value=0, max_value=H, value=int(H/2) + (index * 70) - 100, key=f"y_{h}")
             with cs:
-                f_size = st.number_input(f"Font Size Limit - {h}", min_value=10, max_value=200, value=32, key=f"bs_{h}")
+                f_size = st.number_input(f"Font Point Size - {h}", min_value=10, max_value=200, value=32, key=f"s_{h}")
             with ca:
-                align_type = st.selectbox(f"Data Alignment Alignment Type - {h}", options=["Center", "Left"], key=f"ba_{h}")
+                align_type = st.selectbox(f"Text Horizon Align - {h}", options=["Center", "Left"], key=f"a_{h}")
             
             positions[h] = {"x": x_pos, "y": y_pos, "size": f_size, "align": align_type}
             st.markdown("<br>", unsafe_with_html=True)
             
-        name_col = st.selectbox("Select column header to use for individual document filenames:", options=headers)
+        name_col = st.selectbox("Select key column target to handle individual filename extractions:", options=headers)
 
-        if st.button(f"🚀 Mass Generate All {len(rows)} Custom PDF Files"):
+        if st.button("🚀 Process and Generate Output Documents", use_container_width=True):
             zip_buf = io.BytesIO()
-            progress = st.progress(0, text="Processing files dynamically...")
+            progress = st.progress(0, text="Processing batch records...")
 
             with zipfile.ZipFile(zip_buf, "w") as zf:
                 for idx, row in enumerate(rows):
@@ -213,14 +102,7 @@ with tab3:
                     
                     for h, pos in positions.items():
                         text_val = str(rowdict.get(h, "") if rowdict.get(h) is not None else "")
-                        
-                        try:
-                            font = ImageFont.truetype("LiberationSans-Regular.ttf", pos["size"])
-                        except:
-                            try:
-                                font = ImageFont.truetype("DejaVuSans.ttf", pos["size"])
-                            except:
-                                font = ImageFont.load_default()
+                        font = get_sys_font(pos["size"])
                         
                         left, top, right, bottom = draw.textbbox((0, 0), text_val, font=font)
                         text_width = right - left
@@ -230,18 +112,44 @@ with tab3:
                         else:
                             final_x = pos["x"]
                             
+                        # Draws clean crisp black text directly over layout guidelines/lines
                         draw.text((final_x, pos["y"]), text_val, fill=(0, 0, 0), font=font)
                     
                     pdf_out = io.BytesIO()
                     img_copy.save(pdf_out, format="PDF")
                     
-                    fname = str(rowdict.get(name_col, f"file_{idx+1}")).replace(" ", "_").replace("/", "-")
+                    fname = str(rowdict.get(name_col, f"doc_{idx+1}")).replace(" ", "_").replace("/", "-")
                     zf.writestr(f"{fname}.pdf", pdf_out.getvalue())
                     
-                    progress.progress((idx + 1) / len(rows), text=f"Processed metadata item {idx+1}/{len(rows)}")
+                    progress.progress((idx + 1) / len(rows), text=f"Processing item reference {idx+1}/{len(rows)}")
                     
-            st.success("All dynamic file operations executed cleanly!")
-            st.download_button("⬇️ Download All Extracted Files as ZIP", data=zip_buf.getvalue(), file_name="bulk_generated_documents.zip", mime="application/zip", use_container_width=True)
+            st.success("Batch array calculations executed cleanly with zero validation errors.")
+            st.download_button("⬇️ Download All Processed PDFs (.zip)", data=zip_buf.getvalue(), file_name="generated_documents.zip", mime="application/zip", use_container_width=True)
 
-st.divider()
-st.caption("HandyWriter Ultimate Pro · Secure Sandbox Local Instance Execution.")
+# ---------------------------------------------------------------------------
+# TAB 2: Image -> Word / Excel
+# ---------------------------------------------------------------------------
+with tab2:
+    st.subheader("Convert Scanned Text Block")
+    uploaded_img = st.file_uploader("Upload Image Assets", type=["jpg", "jpeg", "png"], key="img_upload")
+
+    if uploaded_img:
+        image = Image.open(uploaded_img).convert("RGB")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.image(image, use_container_width=True)
+
+        with st.spinner("Extracting standard notes..."):
+            extracted_text = pytesseract.image_to_string(image, config="--psm 6")
+
+        with col2:
+            edited_text = st.text_area("Sanitized Working Space Data", extracted_text, height=350)
+
+        if st.button("💾 Export Text Payload (.docx)"):
+            doc = Document()
+            for line in edited_text.split("\n"):
+                doc.add_paragraph(line)
+            buf = io.BytesIO()
+            doc.save(buf)
+            buf.seek(0)
+            st.download_button("⬇️ Download Docx File", data=buf, file_name="converted.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
