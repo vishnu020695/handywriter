@@ -10,11 +10,11 @@ import fitz  # PyMuPDF
 from docx import Document
 import openpyxl
 
-st.set_page_config(page_title="HandyWriter Pro Ultimate", page_icon="✍️", layout="wide")
-st.title("✍️ HandyWriter Pro Ultimate")
-st.caption("Certificates, Offer Letters என அனைத்தையும் கோடுகளுக்கு மேல் (Overlay) அலைன்மென்ட் மாறாமல் பர்ஃபெக்ட்டாக தயாரிக்கும் இன்ஜின்.")
+st.set_page_config(page_title="HandyWriter Ultimate", page_icon="✍️", layout="wide")
+st.title("✍️ HandyWriter Ultimate")
+st.caption("Certificates, Offer Letters, Letters என 2000+ மாணவர்களின் அனைத்து ஃபார்மட்களையும் அலைன்மென்ட் மாறாமல் பல்க்காக தயாரிக்கும் ஒரே கருவி.")
 
-tab1, tab2, tab3 = st.tabs(["📝 Image → Word / Excel", "📄 Single PDF Overlayer (No Line Break)", "📬 Universal Bulk Merge (2000+ Students)"])
+tab1, tab2, tab3 = st.tabs(["📝 Image → Word / Excel", "📄 Single PDF Editor", "📬 Universal Bulk Merge (All Formats)"])
 
 # ---------------------------------------------------------------------------
 # TAB 1: Image -> Word / Excel
@@ -61,144 +61,140 @@ with tab1:
                 st.download_button("⬇️ Download Excel file", data=buf, file_name="converted.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
 # ---------------------------------------------------------------------------
-# TAB 2: Single PDF Overlayer (கோட்டை உடைக்காமல் மேலே எழுதும் புதிய வசதி)
+# TAB 2: Single PDF Editor (எந்த டெக்ஸ்ட்டையும் மாற்றும் நேரடி எடிட்டர்)
 # ---------------------------------------------------------------------------
 with tab2:
-    st.subheader("கோட்டின் மேல் (Overlay) துல்லியமாக எழுதும் சிங்கிள் எடிட்டர்")
-    st.write("இந்த முறையில் ஒரிஜினல் PDF-ல் இருக்கும் கோடுகள் அப்படியே இருக்கும், அதற்கு மேல் டெக்ஸ்ட் பர்ஃபெக்ட்டாக உட்காரும்.")
-    
-    uploaded_pdf = st.file_uploader("Upload Your Template PDF", type=["pdf"], key="pdf_single_perfect")
+    st.subheader("ஒற்றை PDF / ஆஃபர் லெட்டரில் எதை வேண்டுமானாலும் திருத்திக் கொள்ளும் வசதி")
+    uploaded_pdf = st.file_uploader("Upload Single PDF / Offer Letter", type=["pdf"], key="pdf_upload_single")
     if uploaded_pdf:
         pdf_bytes = uploaded_pdf.read()
         doc_pdf = fitz.open(stream=pdf_bytes, filetype="pdf")
+        st.info(f"Loaded PDF with {doc_pdf.page_count} pages.")
         
-        page_num = st.number_input("Page number", min_value=1, max_value=doc_pdf.page_count, value=1)
+        page_num = st.number_input("Page number to edit", min_value=1, max_value=doc_pdf.page_count, value=1, key="s_page")
         page = doc_pdf[page_num - 1]
         
-        # Convert PDF to high-res image canvas so lines are never broken
-        zoom = 2.0
+        raw_blocks = page.get_text("blocks")
+        blocks = [b for b in raw_blocks if b[4].strip()]
+        
+        zoom = 1.3
         pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
-        page_img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
-        W, H = page_img.size
+        preview_img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
+        draw = ImageDraw.Draw(preview_img)
+        for i, b in enumerate(blocks):
+            x0, y0, x1, y1 = [v * zoom for v in b[:4]]
+            draw.rectangle([x0, y0, x1, y1], outline="red", width=2)
+            draw.text((x0, max(0, y0 - 14)), f"#{i + 1}", fill="red")
+        st.image(preview_img, caption="PDF Preview with Box Numbers", width=500)
         
-        st.write("### 1. என்னென்ன விபரங்கள் கோட்டின் மேல் எழுதப்பட வேண்டும்?")
-        
-        col_in1, col_in2 = st.columns(2)
-        with col_in1:
-            val_name = st.text_input("Enter Student Name:", "AJAY K")
-            val_dept = st.text_input("Enter Department:", "B.Sc. AIML")
-        with col_in2:
-            val_course = st.text_input("Enter Course Name (Optional):", "Cognitive Skills Enhancement - I")
-            val_duration = st.text_input("Enter Duration/Date (Optional):", "June 2024 - November 2024")
-
-        st.markdown("---")
-        st.write("### 2. அலைன்மென்ட் மற்றும் பொசிஷன் செட்டிங்ஸ் (X, Y Coordinates)")
-        st.info("மாற்றங்களைச் சரிபார்க்க கீழே உள்ள எண்களை மாற்றி பொசிஷன் செய்யவும்.")
-
-        fields = {
-            "Student Name": {"val": val_name, "default_y": int(H*0.52), "size": 32},
-            "Department": {"val": val_dept, "default_y": int(H*0.56), "size": 28},
-            "Course Name": {"val": val_course, "default_y": int(H*0.60), "size": 26},
-            "Duration/Date": {"val": val_duration, "default_y": int(H*0.64), "size": 26}
-        }
-        
-        final_positions = {}
-        for f_name, f_info in fields.items():
-            if f_info["val"]:
-                st.markdown(f"**📍 Position Setup for: {f_name}**")
-                cx, cy, cs = st.columns(3)
-                with cx:
-                    x_p = st.number_input(f"X (Horizontal Center) - {f_name}", min_value=0, max_value=W, value=int(W/2), key=f"s_x_{f_name}")
-                with cy:
-                    y_p = st.number_input(f"Y (Vertical Height) - {f_name}", min_value=0, max_value=H, value=f_info["default_y"], key=f"s_y_{f_name}")
-                with cs:
-                    s_p = st.number_input(f"Font Size - {f_name}", min_value=10, max_value=150, value=f_info["size"], key=f"s_s_{f_name}")
+        if not blocks:
+            st.warning("No text blocks found.")
+        else:
+            st.write("### 📝 கீழே உள்ள பெட்டிகளில் எதை வேண்டுமானாலும் மாற்றி அமைத்துக் கொள்ளலாம்:")
+            edited_values = []
+            for i, b in enumerate(blocks):
+                val = st.text_area(f"Box #{i + 1} (Original: {b[4].strip()[:30]}...)", b[4].rstrip("\n"), height=80, key=f"sb_{i}")
+                edited_values.append(val)
                 
-                final_positions[f_name] = {"x": x_p, "y": y_p, "size": s_p, "val": f_info["val"]}
-
-        if st.button("Apply Text over PDF Lines and Download"):
-            img_copy = page_img.copy()
-            draw = ImageDraw.Draw(img_copy)
-            
-            # Use standard cloud font fallback
-            font = ImageFont.load_default()
-
-            for f_name, data in final_positions.items():
-                txt = data["val"]
-                left, top, right, bottom = draw.textbbox((0, 0), txt, font=font)
-                tw = right - left
-                # Draws text directly over the line centered
-                draw.text((data["x"] - (tw/2), data["y"]), txt, fill=(0, 0, 0), font=font)
-            
-            pdf_buffer = io.BytesIO()
-            img_copy.save(pdf_buffer, format="PDF")
-            
-            st.success("கோட்டிற்கு மேல் டெக்ஸ்ட் பர்ஃபெக்ட்டாக அலைன் செய்யப்பட்டது!")
-            st.download_button("⬇_ Download Perfect PDF", data=pdf_buffer.getvalue(), file_name="perfect_edited.pdf", mime="application/pdf")
+            if st.button("Apply and Download Single PDF"):
+                text_dict = page.get_text("dict")
+                dict_blocks = text_dict["blocks"]
+                
+                for i, (b, new_val) in enumerate(zip(blocks, edited_values)):
+                    if new_val != b[4].rstrip("\n"):
+                        bbox = fitz.Rect(b[:4])
+                        
+                        # Find original font size
+                        fontsize = 11
+                        for db in dict_blocks:
+                            for line in db.get("lines", []):
+                                for span in line["spans"]:
+                                    if fitz.Rect(span["bbox"]).intersects(bbox):
+                                        fontsize = span["size"]
+                                        break
+                        
+                        # Wipe out old text completely
+                        page.add_redact_annot(bbox, fill=(1, 1, 1))
+                        page.apply_redactions()
+                        
+                        # Insert new text beautifully with proper font size
+                        page.insert_textbox(bbox, new_val, fontsize=fontsize, fontname="helv")
+                
+                out = io.BytesIO(doc_pdf.tobytes())
+                st.success("மாற்றங்கள் வெற்றிகரமாகச் சேர்க்கப்பட்டன!")
+                st.download_button("⬇️ Download Edited PDF", data=out, file_name="edited.pdf", mime="application/pdf")
 
 # ---------------------------------------------------------------------------
-# TAB 3: Universal Bulk Merge (2000+ மாணவர்களுக்கும் அலைன்மென்ட் மாறாத பல்க் இன்ஜின்)
+# TAB 3: Universal Bulk Merge (அனைத்து ஹெடர்களையும் பல்க்காக மாற்றும் இன்ஜின்)
 # ---------------------------------------------------------------------------
 with tab3:
-    st.subheader("2000+ மாணவர்களின் சான்றிதழ்கள் / ஆஃபர் லெட்டர்கள் தயாரிப்பு")
-    st.write("எக்செல் ஷீட்டில் உள்ள அத்தனை விபரங்களையும் கோடுகளை உடைக்காமல் பல்க்காக அச்சிடலாம்.")
+    st.subheader("2000+ மாணவர்களின் சான்றிதழ் / ஆஃபர் லெட்டர் பல்க் தயாரிப்பு")
+    st.write("உங்கள் எக்செல் ஷீட்டில் நீங்கள் என்னென்ன பத்திகள் (Columns) வைத்துள்ளீர்களோ, அவை அனைத்தையும் இந்த சிஸ்டம் தானாகவே கண்டறிந்து மாற்றித் தரும்.")
     
     st.write("### 1. மாதிரி எக்செல் கோப்பு (Demo Template)")
+    is_offer = st.checkbox("ஆஃபர் லெட்டருக்கான மாதிரி எக்செல் தேவையா? (Check for Offer Letter Template)")
+    if is_offer:
+        headers_demo = ["NAME", "ROLL_NO", "DEPARTMENT", "OFFER_DATE", "SALARY", "JOIN_DATE"]
+        row1 = ["AJAY K", "221AI005", "B.Sc. AIML", "07-July-2026", "Rs. 25,000", "01-August-2026"]
+    else:
+        headers_demo = ["NAME", "DEPARTMENT", "COURSE_NAME", "DURATION", "ROLL_NO"]
+        row1 = ["AJAY K", "B.Sc. AIML", "Cognitive Skills Enhancement - I", "June 2024 - November 2024", "221AI005"]
+        
     demo_wb = openpyxl.Workbook()
     demo_ws = demo_wb.active
     demo_ws.title = "BulkData"
-    demo_ws.append(["NAME", "DEPARTMENT", "COURSE_NAME", "DURATION", "ROLL_NO"])
-    demo_ws.append(["AJAY K", "B.Sc. AIML", "Cognitive Skills Enhancement - I", "June 2024 - November 2024", "221AI005"])
-    demo_ws.append(["ANITHA VISHNU VINISH", "Information Technology", "Cognitive Skills Enhancement - I", "June 2024 - November 2024", "221IT001"])
+    demo_ws.append(headers_demo)
+    demo_ws.append(row1)
     
     demo_buf = io.BytesIO()
     demo_wb.save(demo_buf)
     demo_buf.seek(0)
-    st.download_button("⬇_ Download Universal Demo Excel (.xlsx)", data=demo_buf, file_name="handywriter_bulk_template.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    st.download_button("⬇️ Download Sample Excel Template (.xlsx)", data=demo_buf, file_name="handywriter_template.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
     st.markdown("---")
     st.write("### 2. ஆவணத்தின் வெற்றுப் படம் மற்றும் எக்செல் அப்லோடு")
-    st.info("முக்கிய குறிப்பு: PDF-ஐ 'PDF to JPG' ஆன்லைன் கன்வெர்ட்டர் மூலம் படமாக மாற்றி இங்கே அப்லோட் செய்யவும்.")
+    st.info("குறிப்பு: பிளாங்க் டெம்ப்ளேட்டை இமேஜ் (PNG/JPG) வடிவில் பதிவேற்றவும். (PDF-ஐ ஆன்லைனில் PDF to JPG என மாற்றி எளிதாக எடுத்துக்கொள்ளலாம்)")
     
-    template_file = st.file_uploader("Upload Blank Template Image (PNG or JPG format)", type=["png", "jpg", "jpeg"], key="bulk_template_img")
-    excel_file = st.file_uploader("Upload Student Filled Excel Sheet (.xlsx)", type=["xlsx"], key="main_bulk_excel")
+    template_file = st.file_uploader("Upload Blank Template Image (PNG or JPG only)", type=["png", "jpg", "jpeg"])
+    excel_file = st.file_uploader("Upload Student Excel Sheet (.xlsx)", type=["xlsx"], key="main_bulk_excel")
 
     if template_file and excel_file:
         base_image = Image.open(template_file).convert("RGB")
         W, H = base_image.size
-        st.success(f"Template Loaded! Resolution: {W}x{H} Pixels.")
+        st.success(f"Template Loaded Successfully! Size: {W}x{H} Pixels.")
         
         wb = openpyxl.load_workbook(io.BytesIO(excel_file.read()))
         ws = wb.active
         headers = [c.value for c in ws[1] if c.value is not None]
         rows = list(ws.iter_rows(min_row=2, values_only=True))
         
-        st.info(f"கண்டறியப்பட்ட பத்திகள் (Columns): {', '.join(headers)} (மொத்தம் {len(rows)} மாணவர்கள்)")
+        st.info(f"எக்செல் ஷீட்டில் கண்டறியப்பட்ட பத்திகள் (Columns): {', '.join(headers)}")
+        st.write(f"மொத்தம் **{len(rows)}** மாணவர்களின் விபரங்கள் உள்ளன.")
         
-        st.write("### 3. அலைன்மென்ட் செட்டிங்ஸ் (X, Y Coordinates)")
+        st.write("### 3. அлайнமென்ட் செட்டிங்ஸ் (X, Y Coordinates for EVERY Column)")
+        st.info("ஒவ்வொரு விபரமும் ஆவணத்தின் எந்த இடத்தில் வர வேண்டும் என்பதை கீழே மாற்றியமைக்கவும்.")
         
         positions = {}
         for index, h in enumerate(headers):
-            st.markdown(f"**⚙_ Position for column: `{{{{{h}}}}}`**")
+            st.markdown(f"**⚙️ Settings for column: `{{{{{h}}}}}`**")
             cx, cy, cs, ca = st.columns([2, 2, 2, 2])
             with cx:
-                x_pos = st.number_input(f"X (Horizontal) - {h}", min_value=0, max_value=W, value=int(W/2), key=f"bx_{h}")
+                x_pos = st.number_input(f"X Position - {h}", min_value=0, max_value=W, value=int(W/2), key=f"bx_{h}")
             with cy:
-                y_pos = st.number_input(f"Y (Vertical Height) - {h}", min_value=0, max_value=H, value=int(H*0.5) + (index * 50), key=f"by_{h}")
+                y_pos = st.number_input(f"Y Position - {h}", min_value=0, max_value=H, value=int(H/2) + (index * 70) - 100, key=f"by_{h}")
             with cs:
                 f_size = st.number_input(f"Font Size - {h}", min_value=10, max_value=200, value=32, key=f"bs_{h}")
             with ca:
-                align_type = st.selectbox(f"Alignment - {h}", options=["Center", "Left"], key=f"ba_{h}")
+                align_type = st.selectbox(f"Text Align - {h}", options=["Center", "Left"], key=f"ba_{h}")
             
             positions[h] = {"x": x_pos, "y": y_pos, "size": f_size, "align": align_type}
             st.markdown("<br>", unsafe_with_html=True)
             
-        name_col = st.selectbox("கோப்புகளுக்கு பெயரிட எந்த பத்தியைப் பயன்படுத்த வேண்டும்? (File Name Field)", options=headers)
+        name_col = st.selectbox("கோப்புகளுக்கு பெயரிட எந்த பத்தியைப் பயன்படுத்த வேண்டும்? (File Name)", options=headers)
 
-        if st.button(f"🚀 Generate All {len(rows)} Perfect Documents"):
+        if st.button(f"🚀 Generate All {len(rows)} Custom PDF Documents"):
             zip_buf = io.BytesIO()
             progress = st.progress(0, text="Generating documents...")
-            font = ImageFont.load_default()
 
             with zipfile.ZipFile(zip_buf, "w") as zf:
                 for idx, row in enumerate(rows):
@@ -209,6 +205,15 @@ with tab3:
                     for h, pos in positions.items():
                         text_val = str(rowdict.get(h, "") if rowdict.get(h) is not None else "")
                         
+                        # Cloud சர்வரிலும் பெரிய அளவிலான எழுத்துருக்கள் வேலை செய்ய Pillow-ன் TrueType லோடிங் பிக்ஸ்
+                        try:
+                            font = ImageFont.truetype("LiberationSans-Regular.ttf", pos["size"])
+                        except:
+                            try:
+                                font = ImageFont.truetype("DejaVuSans.ttf", pos["size"])
+                            except:
+                                font = ImageFont.load_default() # Fallback
+                        
                         left, top, right, bottom = draw.textbbox((0, 0), text_val, font=font)
                         text_width = right - left
                         
@@ -217,18 +222,18 @@ with tab3:
                         else:
                             final_x = pos["x"]
                             
-                        draw.text((final_x, pos["y"]), text_val, fill=(30, 30, 30), font=font)
+                        draw.text((final_x, pos["y"]), text_val, fill=(0, 0, 0), font=font)
                     
                     pdf_out = io.BytesIO()
                     img_copy.save(pdf_out, format="PDF")
                     
-                    fname = str(rowdict.get(name_col, f"doc_{idx+1}")).replace(" ", "_").replace("/", "-")
+                    fname = str(rowdict.get(name_col, f"student_{idx+1}")).replace(" ", "_").replace("/", "-")
                     zf.writestr(f"{fname}.pdf", pdf_out.getvalue())
                     
                     progress.progress((idx + 1) / len(rows), text=f"Generated {idx+1}/{len(rows)}")
                     
-            st.success("அனைத்து ஆவணங்களும் அலைன்மென்ட் மாறாமல் பர்ஃபெக்ட்டாகத் தயார் செய்யப்பட்டுவிட்டன!")
-            st.download_button("⬇_ Download All Bulk PDFs as ZIP", data=zip_buf.getvalue(), file_name="bulk_documents.zip", mime="application/zip", use_container_width=True)
+            st.success("அனைத்து ஆவணங்களும் எரர் இல்லாமல் வெற்றிகரமாகத் தயார் செய்யப்பட்டுவிட்டன!")
+            st.download_button("⬇️ Download All PDFs as ZIP", data=zip_buf.getvalue(), file_name="bulk_custom_documents.zip", mime="application/zip", use_container_width=True)
 
 st.divider()
-st.caption("HandyWriter Pro Ultimate · Secure, Cloud-ready local rendering engine.")
+st.caption("HandyWriter Ultimate · Safe, Local Processing inside Streamlit Cloud.")
