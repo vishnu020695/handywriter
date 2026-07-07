@@ -317,6 +317,58 @@ with tab2:
                     if not any_found:
                         st.info("No matches found for any entry — nothing will change if you apply now.")
 
+            def _flags_to_base14(flags, serif_hint):
+                """Guess the closest Base-14 font from PyMuPDF span flags."""
+                italic = bool(flags & 2)
+                bold = bool(flags & 16)
+                mono = bool(flags & 8)
+                serif = serif_hint or bool(flags & 4)
+                if mono:
+                    if bold and italic: return "cobi"
+                    if bold: return "cobo"
+                    if italic: return "coit"
+                    return "cour"
+                if serif:
+                    if bold and italic: return "tibi"
+                    if bold: return "tibo"
+                    if italic: return "tiit"
+                    return "tiro"
+                if bold and italic: return "hebi"
+                if bold: return "hebo"
+                if italic: return "heit"
+                return "helv"
+
+            def _find_line_for_rect(page, rect):
+                """Return the full text line (bbox, text, spans) that contains rect."""
+                text_dict = page.get_text("dict")
+                cy = (rect.y0 + rect.y1) / 2
+                best = None
+                for block in text_dict.get("blocks", []):
+                    for line in block.get("lines", []):
+                        bbox = line["bbox"]
+                        if bbox[1] - 1 <= cy <= bbox[3] + 1:
+                            best = line
+                            break
+                    if best:
+                        break
+                return best
+
+            def _embedded_font_alias(page, span_font_name):
+                """Try to pull the ACTUAL embedded font used by the original text,
+                so the replacement matches the certificate's real typeface instead
+                of falling back to a generic Base-14 font."""
+                try:
+                    for xref, ext, subtype, basefont, refname, encoding in page.get_fonts(full=True):
+                        if basefont == span_font_name or span_font_name in basefont:
+                            fontname, fontext, fonttype, fontbuffer = doc_pdf.extract_font(xref)
+                            if fontbuffer:
+                                alias = f"embedded_{xref}"
+                                page.insert_font(fontname=alias, fontbuffer=fontbuffer)
+                                return alias
+                except Exception:
+                    pass
+                return None
+
             if st.button("Apply Find & Replace to entire PDF"):
                 if not fr_pairs:
                     st.warning("Enter at least one 'Find' value.")
@@ -327,28 +379,61 @@ with tab2:
                         for find_val, replace_val in fr_pairs:
                             rects = page.search_for(find_val)
                             for rect in rects:
+                                # Look at the FULL line this match sits on (not just the
+                                # matched substring) so surrounding words on the same
+                                # line get redrawn too and spacing self-corrects instead
+                                # of leaving a gap where the old word used to be.
+                                line = _find_line_for_rect(page, rect)
                                 fontsize = 11
-                                metrics = page.get_text("dict", clip=rect)
-                                try:
-                                    fontsize = metrics["blocks"][0]["lines"][0]["spans"][0]["size"]
-                                except Exception:
-                                    pass
+                                span_font_name = None
+                                span_flags = 0
+                                if line and line["spans"]:
+                                    span = line["spans"][0]
+                                    fontsize = span["size"]
+                                    span_font_name = span.get("font")
+                                    span_flags = span.get("flags", 0)
                                 if fr_size_override > 0:
                                     fontsize = fr_size_override
-                                page.add_redact_annot(rect, fill=(1, 1, 1))
+
+                                # figure out the full replacement line text
+                                if line:
+                                    line_bbox = fitz.Rect(line["bbox"])
+                                    line_text = "".join(s["text"] for s in line["spans"])
+                                    new_line_text = line_text.replace(find_val, replace_val)
+                                    redact_rect = line_bbox
+                                else:
+                                    line_bbox = rect
+                                    new_line_text = replace_val
+                                    redact_rect = rect
+
+                                # Try to reuse the document's ACTUAL font first;
+                                # only fall back to the user's chosen Base-14 font
+                                # (or a flags-based guess) if that's not possible.
+                                use_fontname = fr_fontname
+                                if font_choice == "Default (Helvetica)" and span_font_name:
+                                    embedded_alias = _embedded_font_alias(page, span_font_name)
+                                    if embedded_alias:
+                                        use_fontname = embedded_alias
+                                    else:
+                                        use_fontname = _flags_to_base14(span_flags, serif_hint=True)
+
+                                page.add_redact_annot(redact_rect, fill=(1, 1, 1))
                                 page.apply_redactions()
+
+                                # Give the box a little vertical breathing room only —
+                                # keep the original line's own width/position so nothing
+                                # drifts relative to text that wasn't touched.
                                 padded = fitz.Rect(
-                                    rect.x0, rect.y0,
-                                    min(rect.x0 + max(rect.width, 300), page_rect.width - 20),
-                                    rect.y1,
+                                    line_bbox.x0, line_bbox.y0,
+                                    min(line_bbox.x1 + 10, page_rect.width - 10),
+                                    min(line_bbox.y1 + fontsize * 0.6, page_rect.height - 10),
                                 )
-                                padded.y1 = min(padded.y1 + fontsize * 3, page_rect.height - 20)
                                 size = fontsize
-                                rc = page.insert_textbox(padded, replace_val, fontsize=size, fontname=fr_fontname)
+                                rc = page.insert_textbox(padded, new_line_text, fontsize=size, fontname=use_fontname)
                                 tries = 0
                                 while rc < 0 and size > 6 and tries < 8:
                                     size -= 1
-                                    rc = page.insert_textbox(padded, replace_val, fontsize=size, fontname=fr_fontname)
+                                    rc = page.insert_textbox(padded, new_line_text, fontsize=size, fontname=use_fontname)
                                     tries += 1
                                 total_replacements += 1
                     if total_replacements == 0:
