@@ -139,6 +139,7 @@ with tab2:
             "Choose an action",
             [
                 "Find & Replace (exact text — safest, no misalignment)",
+                "Cover & Stamp (fixes tricky fonts / broken text)",
                 "Edit page text (direct, in-place)",
                 "Edit images / logo (replace or delete)",
                 "Delete pages",
@@ -148,7 +149,94 @@ with tab2:
             ],
         )
 
-        if action == "Find & Replace (exact text — safest, no misalignment)":
+        if action == "Cover & Stamp (fixes tricky fonts / broken text)":
+            st.write(
+                "Use this when a certificate/letter uses a fancy or unusual font that "
+                "makes other tools misalign text (you'll see this if Find & Replace "
+                "produced garbled or overlapping results). This draws a plain white box "
+                "over the broken area and types new text at an exact position you choose "
+                "— completely independent of the original file's font data, so it can't "
+                "misalign."
+            )
+            stamp_page_num = st.number_input(
+                "Page number", min_value=1, max_value=doc_pdf.page_count, value=1, key="stamp_page_num"
+            )
+            stamp_page_index = stamp_page_num - 1
+            stamp_page = doc_pdf[stamp_page_index]
+            stamp_page_rect = stamp_page.rect
+
+            zoom = 1.5
+            stamp_pix = stamp_page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
+            stamp_img_w, stamp_img_h = stamp_pix.width, stamp_pix.height
+
+            st.write("**Step 1: Set the cover box position** (in pixels, matching the preview image below)")
+            cb1, cb2, cb3, cb4 = st.columns(4)
+            with cb1:
+                cov_x0 = st.number_input("Left (X0)", min_value=0, max_value=stamp_img_w, value=100, key="cov_x0")
+            with cb2:
+                cov_y0 = st.number_input("Top (Y0)", min_value=0, max_value=stamp_img_h, value=100, key="cov_y0")
+            with cb3:
+                cov_x1 = st.number_input("Right (X1)", min_value=0, max_value=stamp_img_w, value=400, key="cov_x1")
+            with cb4:
+                cov_y1 = st.number_input("Bottom (Y1)", min_value=0, max_value=stamp_img_h, value=130, key="cov_y1")
+
+            # preview with red box overlay at current settings
+            _prev_img = Image.open(io.BytesIO(stamp_pix.tobytes("png"))).convert("RGB")
+            from PIL import ImageDraw as _ImgDraw2
+            _draw2 = _ImgDraw2.Draw(_prev_img)
+            _draw2.rectangle([cov_x0, cov_y0, cov_x1, cov_y1], outline="red", width=3)
+            st.image(_prev_img, caption=f"Page {stamp_page_num} — red box shows where the cover + new text will go", width=600)
+
+            st.write("**Step 2: New text and font settings**")
+            stamp_text = st.text_area("Text to type in that box", key="stamp_text")
+            sf1, sf2, sf3, sf4 = st.columns(4)
+            with sf1:
+                stamp_font_choice = st.selectbox(
+                    "Font", ["Default (Helvetica)", "Times New Roman", "Courier (monospace)"], key="stamp_font_choice"
+                )
+            with sf2:
+                stamp_bold = st.checkbox("Bold", key="stamp_bold")
+            with sf3:
+                stamp_size = st.number_input("Font size", min_value=6, max_value=200, value=13, key="stamp_size")
+            with sf4:
+                stamp_align = st.selectbox("Align", ["Left", "Center"], key="stamp_align")
+
+            _stamp_font_map = {
+                "Default (Helvetica)": {"regular": "helv", "bold": "hebo"},
+                "Times New Roman": {"regular": "tiro", "bold": "tibo"},
+                "Courier (monospace)": {"regular": "cour", "bold": "cobo"},
+            }
+            stamp_fontname = _stamp_font_map[stamp_font_choice]["bold" if stamp_bold else "regular"]
+            stamp_align_code = 1 if stamp_align == "Center" else 0
+
+            if st.button("Apply cover & stamp, then download"):
+                if not stamp_text.strip():
+                    st.warning("Enter the text to type into the box.")
+                else:
+                    # convert pixel coords (at preview zoom) back to PDF point coords
+                    pdf_rect = fitz.Rect(cov_x0 / zoom, cov_y0 / zoom, cov_x1 / zoom, cov_y1 / zoom)
+                    stamp_page.draw_rect(pdf_rect, color=None, fill=(1, 1, 1), fill_opacity=1)
+                    rc = stamp_page.insert_textbox(
+                        pdf_rect, stamp_text, fontsize=stamp_size, fontname=stamp_fontname, align=stamp_align_code
+                    )
+                    size = stamp_size
+                    tries = 0
+                    while rc < 0 and size > 6 and tries < 8:
+                        size -= 1
+                        rc = stamp_page.insert_textbox(
+                            pdf_rect, stamp_text, fontsize=size, fontname=stamp_fontname, align=stamp_align_code
+                        )
+                        tries += 1
+                    out_stamp = io.BytesIO(doc_pdf.tobytes())
+                    st.success("Applied.")
+                    st.download_button(
+                        "⬇️ Download edited PDF",
+                        data=out_stamp,
+                        file_name="stamped_edited.pdf",
+                        mime="application/pdf",
+                    )
+
+        elif action == "Find & Replace (exact text — safest, no misalignment)":
             st.write(
                 "Type the exact text you want to change (e.g. `AJAY K`) and what to "
                 "change it to. This only touches that exact text — everything else on "
