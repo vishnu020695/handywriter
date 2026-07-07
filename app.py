@@ -61,7 +61,7 @@ with tab1:
                 st.download_button("⬇️ Download Excel file", data=buf, file_name="converted.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
 # ---------------------------------------------------------------------------
-# TAB 2: PDF Editor
+# TAB 2: PDF Editor (ஒற்றை PDF-ஐ எடிட் செய்யும் வசதி சேர்க்கப்பட்டது)
 # ---------------------------------------------------------------------------
 with tab2:
     st.subheader("Simple PDF Editing")
@@ -74,13 +74,84 @@ with tab2:
         action = st.selectbox(
             "Choose an action",
             [
+                "Edit page text (direct, in-place)",
                 "Delete pages",
                 "Rotate pages",
                 "Add text watermark"
             ],
         )
 
-        if action == "Delete pages":
+        if action == "Edit page text (direct, in-place)":
+            st.write("PDF-ல் மாற்ற வேண்டிய டெக்ஸ்ட் பாக்ஸ்களை கீழே திருத்திவிட்டு Apply செய்யவும்.")
+            page_num = st.number_input("Page number to edit", min_value=1, max_value=doc_pdf.page_count, value=1)
+            page_index = page_num - 1
+            page = doc_pdf[page_index]
+
+            raw_blocks = page.get_text("blocks")
+            blocks = [b for b in raw_blocks if b[4].strip()]
+
+            # Preview Block Numbers
+            zoom = 1.3
+            pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
+            preview_img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
+            draw = ImageDraw.Draw(preview_img)
+            for i, b in enumerate(blocks):
+                x0, y0, x1, y1 = [v * zoom for v in b[:4]]
+                draw.rectangle([x0, y0, x1, y1], outline="red", width=2)
+                draw.text((x0, max(0, y0 - 14)), f"#{i + 1}", fill="red")
+            st.image(preview_img, caption=f"Page {page_num} — Preview with Box Numbers", width=500)
+
+            if not blocks:
+                st.warning("இந்த PDF பக்கத்தில் எடிட் செய்யக்கூடிய டெக்ஸ்ட் எதுவும் கிடைக்கவில்லை. இது ஸ்கேன் செய்யப்பட்ட படமாக இருக்கலாம்.")
+            else:
+                st.write(f"**{len(blocks)}** எடிட் செய்யக்கூடிய டெக்ஸ்ட் பாக்ஸ்கள் கண்டறியப்பட்டன:")
+                edited_values = []
+                for i, b in enumerate(blocks):
+                    original_text = b[4].rstrip("\n")
+                    val = st.text_area(f"Box #{i + 1}", original_text, height=68, key=f"block_{page_index}_{i}")
+                    edited_values.append(val)
+
+                if st.button("Apply edits to this page and download"):
+                    text_dict = page.get_text("dict")
+                    dict_blocks = text_dict["blocks"]
+
+                    changed_any = False
+                    edits = []
+                    for i, (b, new_val) in enumerate(zip(blocks, edited_values)):
+                        original_text = b[4].rstrip("\n")
+                        if new_val != original_text:
+                            changed_any = True
+                            bbox = fitz.Rect(b[:4])
+                            fontsize = 11
+                            for db in dict_blocks:
+                                for line in db.get("lines", []):
+                                    for span in line["spans"]:
+                                        if fitz.Rect(span["bbox"]).intersects(bbox):
+                                            fontsize = span["size"]
+                                            break
+                            edits.append((bbox, new_val, fontsize))
+
+                    if not changed_any:
+                        st.info("மாற்றங்கள் எதுவும் செய்யப்படவில்லை.")
+                    else:
+                        for bbox, new_val, fontsize in edits:
+                            page.add_redact_annot(bbox, fill=(1, 1, 1))
+                        page.apply_redactions()
+                        page_rect = page.rect
+                        for bbox, new_val, fontsize in edits:
+                            padded = fitz.Rect(
+                                bbox.x0, bbox.y0,
+                                min(bbox.x0 + max(bbox.width, 300), page_rect.width - 36),
+                                bbox.y1,
+                            )
+                            padded.y1 = min(padded.y1 + fontsize * 4, page_rect.height - 36)
+                            rc = page.insert_textbox(padded, new_val, fontsize=fontsize, fontname="helv")
+                        
+                        out = io.BytesIO(doc_pdf.tobytes())
+                        st.success("மாற்றங்கள் வெற்றிகரமாகச் சேர்க்கப்பட்டன!")
+                        st.download_button("⬇️ Download edited PDF", data=out, file_name="edited_text.pdf", mime="application/pdf")
+
+        elif action == "Delete pages":
             pages_to_delete = st.text_input("Page numbers to delete (comma-separated, e.g. 1,3,5)")
             if st.button("Apply and download"):
                 try:
