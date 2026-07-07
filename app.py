@@ -125,6 +125,16 @@ with tab2:
         doc_pdf = fitz.open(stream=pdf_bytes, filetype="pdf")
         st.info(f"Loaded PDF with **{doc_pdf.page_count}** pages.")
 
+        with st.expander(f"📖 Browse pages (see exact text on any of the {doc_pdf.page_count} pages)", expanded=(doc_pdf.page_count > 1)):
+            browse_page_num = st.number_input(
+                "Page to view", min_value=1, max_value=doc_pdf.page_count, value=1, key="browse_page_num"
+            )
+            _browse_page = doc_pdf[browse_page_num - 1]
+            _browse_pix = _browse_page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5))
+            st.image(_browse_pix.tobytes("png"), caption=f"Page {browse_page_num} of {doc_pdf.page_count}")
+            with st.popover("📋 Show this page's raw text (to copy exact spelling/spacing)"):
+                st.text(_browse_page.get_text())
+
         action = st.selectbox(
             "Choose an action",
             [
@@ -167,6 +177,36 @@ with tab2:
                     replace_val = st.text_input(f"Replace with #{i+1}", key=f"fr_replace_{i}")
                 if find_val.strip():
                     fr_pairs.append((find_val, replace_val))
+
+            if st.button("🔍 Preview matches (see which pages, before replacing)"):
+                if not fr_pairs:
+                    st.warning("Enter at least one 'Find' value.")
+                else:
+                    any_found = False
+                    for find_val, _ in fr_pairs:
+                        pages_with_match = []
+                        for pnum in range(doc_pdf.page_count):
+                            rects = doc_pdf[pnum].search_for(find_val)
+                            if rects:
+                                pages_with_match.append((pnum + 1, len(rects)))
+                        if pages_with_match:
+                            any_found = True
+                            st.write(f"**\"{find_val}\"** found on: " + ", ".join(f"page {p} ({n}x)" for p, n in pages_with_match))
+                            first_page_num, _ = pages_with_match[0]
+                            _prev_page = doc_pdf[first_page_num - 1]
+                            _prev_rects = _prev_page.search_for(find_val)
+                            zoom = 1.5
+                            _pix = _prev_page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
+                            _img = Image.open(io.BytesIO(_pix.tobytes("png"))).convert("RGB")
+                            from PIL import ImageDraw as _ImageDraw
+                            _draw = _ImageDraw.Draw(_img)
+                            for r in _prev_rects:
+                                _draw.rectangle([r.x0*zoom, r.y0*zoom, r.x1*zoom, r.y1*zoom], outline="red", width=3)
+                            st.image(_img, caption=f"Highlighted on page {first_page_num}", width=500)
+                        else:
+                            st.warning(f"**\"{find_val}\"** was not found anywhere in the document. Check spelling/spacing.")
+                    if not any_found:
+                        st.info("No matches found for any entry — nothing will change if you apply now.")
 
             if st.button("Apply Find & Replace to entire PDF"):
                 if not fr_pairs:
