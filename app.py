@@ -61,10 +61,12 @@ with tab1:
                 st.download_button("⬇️ Download Excel file", data=buf, file_name="converted.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
 # ---------------------------------------------------------------------------
-# TAB 2: Single PDF Editor (எந்த டெக்ஸ்ட்டையும் மாற்றும் நேரடி எடிட்டர்)
+# TAB 2: Single PDF Editor (கோட்டை உடைக்காமல் மேலே எழுதும் பிக்சல் முறை - FIXED)
 # ---------------------------------------------------------------------------
 with tab2:
     st.subheader("ஒற்றை PDF / ஆஃபர் லெட்டரில் எதை வேண்டுமானாலும் திருத்திக் கொள்ளும் வசதி")
+    st.write("இந்த முறையில் ஒரிஜினல் PDF-ல் உள்ள கோடுகள் உடையாது. அதற்கு மேல் (Overlay) டெக்ஸ்ட் பர்ஃபெக்ட்டாக அமரும்.")
+    
     uploaded_pdf = st.file_uploader("Upload Single PDF / Offer Letter", type=["pdf"], key="pdf_upload_single")
     if uploaded_pdf:
         pdf_bytes = uploaded_pdf.read()
@@ -74,58 +76,103 @@ with tab2:
         page_num = st.number_input("Page number to edit", min_value=1, max_value=doc_pdf.page_count, value=1, key="s_page")
         page = doc_pdf[page_num - 1]
         
-        raw_blocks = page.get_text("blocks")
-        blocks = [b for b in raw_blocks if b[4].strip()]
-        
-        zoom = 1.3
+        # PDF பக்கத்தை இமேஜாக மாற்றி துல்லியமான பிக்சல் அலைன்மென்ட் செய்கிறோம்
+        zoom = 2.0  
         pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
-        preview_img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
-        draw = ImageDraw.Draw(preview_img)
-        for i, b in enumerate(blocks):
-            x0, y0, x1, y1 = [v * zoom for v in b[:4]]
-            draw.rectangle([x0, y0, x1, y1], outline="red", width=2)
-            draw.text((x0, max(0, y0 - 14)), f"#{i + 1}", fill="red")
-        st.image(preview_img, caption="PDF Preview with Box Numbers", width=500)
+        page_img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
+        W, H = page_img.size
+
+        # Session State பயன்படுத்தி எத்தனை கஸ்டம் வரிகள் வேண்டுமானாலும் உருவாக்கிக் கொள்ளலாம்
+        if "single_fields" not in st.session_state:
+            st.session_state.single_fields = ["FIELD_1", "FIELD_2"]
+
+        st.write("### 🛠️ எடிட் செய்ய வேண்டிய புதிய ஃபீல்டுகளை உருவாக்கவும்")
+        col_add, col_rem = st.columns(2)
+        with col_add:
+            f_name = st.text_input("பாக்ஸ் பெயர் (எ.கா: NAME, DEPT, COURSE):").upper().strip()
+            if st.button("➕ Add Box") and f_name:
+                if f_name not in st.session_state.single_fields:
+                    st.session_state.single_fields.append(f_name)
+                    st.rerun()
+        with col_rem:
+            f_rem = st.selectbox("நீக்க வேண்டிய பாக்ஸ்:", options=["-- Select --"] + st.session_state.single_fields)
+            if st.button("🗑️ Remove Box") and f_rem != "-- Select --":
+                st.session_state.single_fields.remove(f_rem)
+                st.rerun()
+
+        st.markdown("---")
+        st.write("### 1. பொசிஷன் மற்றும் டைப் செய்ய வேண்டிய விபரங்கள்")
         
-        if not blocks:
-            st.warning("No text blocks found.")
-        else:
-            st.write("### 📝 கீழே உள்ள பெட்டிகளில் எதை வேண்டுமானாலும் மாற்றி அமைத்துக் கொள்ளலாம்:")
-            edited_values = []
-            for i, b in enumerate(blocks):
-                val = st.text_area(f"Box #{i + 1} (Original: {b[4].strip()[:30]}...)", b[4].rstrip("\n"), height=80, key=f"sb_{i}")
-                edited_values.append(val)
-                
-            if st.button("Apply and Download Single PDF"):
-                text_dict = page.get_text("dict")
-                dict_blocks = text_dict["blocks"]
-                
-                for i, (b, new_val) in enumerate(zip(blocks, edited_values)):
-                    if new_val != b[4].rstrip("\n"):
-                        bbox = fitz.Rect(b[:4])
+        single_positions = {}
+        for index, field in enumerate(st.session_state.single_fields):
+            st.markdown(f"**📍 Configuration for: `{field}`**")
+            cx, cy, cs, ca, ct = st.columns([2, 2, 2, 2, 4])
+            with cx:
+                x_pos = st.number_input(f"X (Idathu/Valathu) - {field}", min_value=0, max_value=W, value=int(W/2), key=f"sf_x_{field}")
+            with cy:
+                y_pos = st.number_input(f"Y (Mele/Keezhe) - {field}", min_value=0, max_value=H, value=int(H/2) + (index * 70) - 100, key=f"sf_y_{field}")
+            with cs:
+                f_size = st.number_input(f"Font Size - {field}", min_value=10, max_value=150, value=32, key=f"sf_s_{field}")
+            with ca:
+                align_type = st.selectbox(f"Align - {field}", options=["Center", "Left"], key=f"sf_a_{field}")
+            with ct:
+                text_val = st.text_input(f"Enter Text to print over line:", value="", key=f"sf_v_{field}", placeholder="இங்கு டைப் செய்யவும்...")
+            
+            single_positions[field] = {"x": x_pos, "y": y_pos, "size": f_size, "align": align_type, "text": text_val}
+            st.markdown("<br>", unsafe_with_html=True)
+
+        if st.button("Apply Text on PDF and Download"):
+            draw = ImageDraw.Draw(page_img)
+            
+            for field, data in single_positions.items():
+                val_to_print = data["text"]
+                if val_to_print:
+                    try:
+                        font = ImageFont.truetype("LiberationSans-Regular.ttf", data["size"])
+                    except:
+                        try:
+                            font = ImageFont.truetype("DejaVuSans.ttf", data["size"])
+                        except:
+                            font = ImageFont.load_default()
+                    
+                    left, top, right, bottom = draw.textbbox((0, 0), val_to_print, font=font)
+                    text_width = right - left
+                    
+                    if data["align"] == "Center":
+                        final_x = data["x"] - (text_width / 2)
+                    else:
+                        final_x = data["x"]
                         
-                        # Find original font size
-                        fontsize = 11
-                        for db in dict_blocks:
-                            for line in db.get("lines", []):
-                                for span in line["spans"]:
-                                    if fitz.Rect(span["bbox"]).intersects(bbox):
-                                        fontsize = span["size"]
-                                        break
-                        
-                        # Wipe out old text completely
-                        page.add_redact_annot(bbox, fill=(1, 1, 1))
-                        page.apply_redactions()
-                        
-                        # Insert new text beautifully with proper font size
-                        page.insert_textbox(bbox, new_val, fontsize=fontsize, fontname="helv")
-                
+                    # கோட்டின் மேல் (Overlay) பர்ஃபெக்ட்டாக பிரிண்ட் செய்கிறது
+                    draw.text((final_x, data["y"]), val_to_print, fill=(0, 0, 0), font=font)
+
+            pdf_buffer = io.BytesIO()
+            page_img.save(pdf_buffer, format="PDF")
+            
+            st.success("டெக்ஸ்ட் கோடுகளுக்கு மேல் துல்லியமாகப் பொருத்தப்பட்டது!")
+            st.download_button("⬇️ Download Perfect PDF", data=pdf_buffer.getvalue(), file_name="perfect_edited.pdf", mime="application/pdf", use_container_width=True)
+
+        elif action == "Delete pages":
+            pages_to_delete = st.text_input("Page numbers to delete (comma-separated, e.g. 1,3,5)")
+            if st.button("Apply and download"):
+                try:
+                    nums = [int(x.strip()) - 1 for x in pages_to_delete.split(",") if x.strip()]
+                    doc_pdf.delete_pages(nums)
+                    out = io.BytesIO(doc_pdf.tobytes())
+                    st.download_button("⬇️ Download edited PDF", data=out, file_name="edited.pdf", mime="application/pdf")
+                except Exception as e:
+                    st.error(f"Check your page numbers. Details: {e}")
+
+        elif action == "Rotate pages":
+            angle = st.selectbox("Rotate by", [90, 180, 270])
+            if st.button("Apply and download"):
+                for page in doc_pdf:
+                    page.set_rotation(angle)
                 out = io.BytesIO(doc_pdf.tobytes())
-                st.success("மாற்றங்கள் வெற்றிகரமாகச் சேர்க்கப்பட்டன!")
-                st.download_button("⬇️ Download Edited PDF", data=out, file_name="edited.pdf", mime="application/pdf")
+                st.download_button("⬇️ Download rotated PDF", data=out, file_name="rotated.pdf", mime="application/pdf")
 
 # ---------------------------------------------------------------------------
-# TAB 3: Universal Bulk Merge (அனைத்து ஹெடர்களையும் பல்க்காக மாற்றும் இன்ஜின்)
+# TAB 3: Universal Bulk Merge
 # ---------------------------------------------------------------------------
 with tab3:
     st.subheader("2000+ மாணவர்களின் சான்றிதழ் / ஆஃபர் லெட்டர் பல்க் தயாரிப்பு")
@@ -143,8 +190,8 @@ with tab3:
     demo_wb = openpyxl.Workbook()
     demo_ws = demo_wb.active
     demo_ws.title = "BulkData"
-    demo_ws.append(headers_demo)
-    demo_ws.append(row1)
+    demo_wb.append(headers_demo)
+    demo_wb.append(row1)
     
     demo_buf = io.BytesIO()
     demo_wb.save(demo_buf)
@@ -153,7 +200,6 @@ with tab3:
 
     st.markdown("---")
     st.write("### 2. ஆவணத்தின் வெற்றுப் படம் மற்றும் எக்செல் அப்லோடு")
-    st.info("குறிப்பு: பிளாங்க் டெம்ப்ளேட்டை இமேஜ் (PNG/JPG) வடிவில் பதிவேற்றவும். (PDF-ஐ ஆன்லைனில் PDF to JPG என மாற்றி எளிதாக எடுத்துக்கொள்ளலாம்)")
     
     template_file = st.file_uploader("Upload Blank Template Image (PNG or JPG only)", type=["png", "jpg", "jpeg"])
     excel_file = st.file_uploader("Upload Student Excel Sheet (.xlsx)", type=["xlsx"], key="main_bulk_excel")
@@ -172,7 +218,6 @@ with tab3:
         st.write(f"மொத்தம் **{len(rows)}** மாணவர்களின் விபரங்கள் உள்ளன.")
         
         st.write("### 3. அлайнமென்ட் செட்டிங்ஸ் (X, Y Coordinates for EVERY Column)")
-        st.info("ஒவ்வொரு விபரமும் ஆவணத்தின் எந்த இடத்தில் வர வேண்டும் என்பதை கீழே மாற்றியமைக்கவும்.")
         
         positions = {}
         for index, h in enumerate(headers):
@@ -205,14 +250,13 @@ with tab3:
                     for h, pos in positions.items():
                         text_val = str(rowdict.get(h, "") if rowdict.get(h) is not None else "")
                         
-                        # Cloud சர்வரிலும் பெரிய அளவிலான எழுத்துருக்கள் வேலை செய்ய Pillow-ன் TrueType லோடிங் பிக்ஸ்
                         try:
                             font = ImageFont.truetype("LiberationSans-Regular.ttf", pos["size"])
                         except:
                             try:
                                 font = ImageFont.truetype("DejaVuSans.ttf", pos["size"])
                             except:
-                                font = ImageFont.load_default() # Fallback
+                                font = ImageFont.load_default()
                         
                         left, top, right, bottom = draw.textbbox((0, 0), text_val, font=font)
                         text_width = right - left
