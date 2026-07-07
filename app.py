@@ -12,9 +12,9 @@ import openpyxl
 
 st.set_page_config(page_title="HandyWriter Ultimate", page_icon="✍️", layout="wide")
 st.title("✍️ HandyWriter Ultimate")
-st.caption("Certificates, 4-Page Offer Letters, Documents என எதை வேண்டுமானாலும் எரர் மற்றும் அலைன்மென்ட் பிழையின்றி மாற்றும் ஒரே டூல்.")
+st.caption("Perfect execution for Certificates, multi-page Offer Letters, and Bulk Documents without alignment crashes.")
 
-tab1, tab2, tab3 = st.tabs(["📝 Image → Word / Excel", "📄 Intelligent PDF Editor (No Boxes)", "📬 Universal Bulk Merge (All Formats)"])
+tab1, tab2, tab3 = st.tabs(["📝 Image → Word / Excel", "📄 Intelligent PDF Editor", "📬 Universal Bulk Merge"])
 
 # ---------------------------------------------------------------------------
 # TAB 1: Image -> Word / Excel
@@ -61,57 +61,60 @@ with tab1:
                 st.download_button("⬇️ Download Excel file", data=buf, file_name="converted.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
 # ---------------------------------------------------------------------------
-# TAB 2: Intelligent PDF Editor (நூற்றுக்கணக்கான பெட்டிகள் இல்லாத ஸ்மார்ட் எடிட்டர்)
+# TAB 2: Intelligent PDF Editor (100% English & Secure Search & Replace)
 # ---------------------------------------------------------------------------
 with tab2:
-    st.subheader("🔍 தேடித் திருத்தும் ஸ்மார்ட் PDF எடிட்டர் (ஆஃபர் லெட்டர்களுக்கு மிகச்சிறந்தது)")
-    st.write("PDF-ல் உள்ள நூற்றுக்கணக்கான பெட்டிகளைத் தேடத் தேவையில்லை. எந்த வார்த்தையை மாற்ற வேண்டுமோ அதை மட்டும் கீழே கொடுத்து மாற்றிக் கொள்ளலாம்.")
+    st.subheader("🔍 Intelligent Search & Replace (Best for Multi-page Offer Letters)")
+    st.write("No layout boxes to click. Simply enter the text you want to find and what to replace it with.")
     
-    uploaded_pdf = st.file_uploader("Upload Single PDF / Scanned Offer Letter", type=["pdf"], key="pdf_upload_single")
+    uploaded_pdf = st.file_uploader("Upload Single PDF / Offer Letter", type=["pdf"], key="pdf_upload_single")
     if uploaded_pdf:
         pdf_bytes = uploaded_pdf.read()
-        doc_pdf = fitz.open(stream=pdf_bytes, filetype="pdf")
-        st.success(f"Loaded PDF with {doc_pdf.page_count} pages.")
         
-        st.write("### ✍️ எடிட் செய்ய வேண்டிய விபரங்கள் (நீங்கள் எத்தனை வரிகள் வேண்டுமானாலும் மாற்றலாம்):")
+        st.write("### ✍️ Enter Details to Edit:")
         
-        # Dynamic Search and Replace fields using Streamlit session state
         if "replacements_count" not in st.session_state:
-            st.session_state.replacements_count = 2
+            st.session_state.replacements_count = 3
 
         col_btn1, col_btn2 = st.columns(2)
         with col_btn1:
-            if st.button("➕ இன்னும் ஒரு வார்த்தையை மாற்ற வேண்டுமா? (Add Word)"):
+            if st.button("➕ Add More Fields"):
                 st.session_state.replacements_count += 1
                 st.rerun()
         with col_btn2:
-            if st.button("🗑️ கடைசியாக சேர்த்ததை நீக்கு (Remove)") and st.session_state.replacements_count > 1:
+            if st.button("🗑️ Remove Last Field") and st.session_state.replacements_count > 1:
                 st.session_state.replacements_count -= 1
                 st.rerun()
 
         change_dict = {}
         for idx in range(st.session_state.replacements_count):
-            st.markdown(f"**வார்த்தை #{idx+1}**")
+            st.markdown(f"**Field #{idx+1}**")
             c_find, c_replace = st.columns(2)
             with c_find:
-                find_txt = st.text_input(f"மாற்ற வேண்டிய பழைய வார்த்தை (எ.கா: AJAY K அல்லது B.Sc. AIML):", key=f"f_{idx}")
+                find_txt = st.text_input(f"Find Text (e.g., AJAY K):", key=f"f_{idx}")
             with c_replace:
-                replace_txt = st.text_input(f"வர வேண்டிய புதிய வார்த்தை (எ.கா: VISHNU அல்லது B.Com):", key=f"r_{idx}")
+                replace_txt = st.text_input(f"Replace With (e.g., VISHNU):", key=f"r_{idx}")
             
             if find_txt.strip():
                 change_dict[find_txt.strip()] = replace_txt.strip()
 
         if st.button("🚀 Apply Changes and Download PDF", use_container_width=True):
             if not change_dict:
-                st.warning("மாற்றுவதற்கு எந்த வார்த்தையையும் நீங்கள் உள்ளிடவில்லை.")
+                st.warning("Please enter at least one text field to find and replace.")
             else:
-                with st.spinner("ஆவணத்தில் உள்ள வரிகளைத் தேடி மாற்றியமைக்கிறது..."):
+                with st.spinner("Processing document layout changes cleanly..."):
+                    # Open file via clean Streamlit memory block
+                    doc_pdf = fitz.open(stream=pdf_bytes, filetype="pdf")
+                    
                     for page in doc_pdf:
                         for find_str, replace_str in change_dict.items():
-                            # Find the exact text location in PDF coordinates
                             text_instances = page.search_for(find_str)
                             for rect in text_instances:
-                                # Get exact font details before wiping out
+                                # Ensure boundary check is finite and valid to prevent PyMuPDF empty rectangle crashes
+                                if rect.is_empty or rect.is_infinite or rect.width <= 0 or rect.height <= 0:
+                                    continue
+                                
+                                # Fetch original font structure safely
                                 text_dict = page.get_text("dict", clip=rect)
                                 fontsize = 11
                                 try:
@@ -119,26 +122,26 @@ with tab2:
                                 except:
                                     pass
 
-                                # 1. Wipe out the old text cleanly
+                                # Clean original text spot
                                 page.add_redact_annot(rect, fill=(1, 1, 1))
                                 page.apply_redactions()
                                 
-                                # 2. Overlay new text on top of the original coordinate box perfectly
-                                page.insert_textbox(rect, replace_str, fontsize=fontsize, fontname="helv", align=1)
+                                # Clean input insertion
+                                page.insert_textbox(rect, replace_str, fontsize=fontsize, fontname="helv", align=0)
                     
                     out_pdf = io.BytesIO(doc_pdf.tobytes())
-                    st.success("அனைத்து பக்கங்களிலும் மாற்றங்கள் வெற்றிகரமாகச் செய்யப்பட்டன!")
-                    st.download_button("⬇️ Download Final Edited PDF", data=out_pdf, file_name="perfect_edited.pdf", mime="application/pdf", use_container_width=True)
+                    st.success("All edits processed perfectly across all pages!")
+                    st.download_button("⬇️ Download Final Edited PDF", data=out_pdf, file_name="edited_document.pdf", mime="application/pdf", use_container_width=True)
 
 # ---------------------------------------------------------------------------
-# TAB 3: Universal Bulk Merge (Fixed Engine)
+# TAB 3: Universal Bulk Merge (Clean & Dynamic Engine)
 # ---------------------------------------------------------------------------
 with tab3:
-    st.subheader("2000+ மாணவர்களின் சான்றிதழ் / ஆஃபர் லெட்டர் பல்க் தயாரிப்பு")
-    st.write("உங்கள் எக்செல் ஷீட்டில் நீங்கள் என்னென்ன பத்திகள் (Columns) வைத்துள்ளீர்களோ, அவை அனைத்தையும் இந்த சிஸ்டம் தானாகவே கண்டறிந்து மாற்றித் தரும்.")
+    st.subheader("Bulk Document / Certificate / Offer Letter Generation")
+    st.write("Upload any blank layout background along with your custom Excel data to process mass files smoothly.")
     
-    st.write("### 1. மாதிரி எக்செல் கோப்பு (Demo Template)")
-    is_offer = st.checkbox("ஆஃபர் லெட்டருக்கான மாதிரி எக்செல் தேவையா? (Check for Offer Letter Template)")
+    st.write("### 1. Download Demo Excel Data Structure")
+    is_offer = st.checkbox("Check here if generating Offer Letters (Changes data structure layout)")
     
     def generate_demo_excel(offer_mode):
         wb = openpyxl.Workbook()
@@ -159,7 +162,8 @@ with tab3:
     st.download_button("⬇️ Download Sample Excel Template (.xlsx)", data=demo_data, file_name="handywriter_template.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
     st.markdown("---")
-    st.write("### 2. ஆவணத்தின் வெற்றுப் படம் மற்றும் எக்செல் அப்லோடு")
+    st.write("### 2. Upload Document Layout Template and Data Sheets")
+    st.info("Tip: Upload your blank certificate page or offer letter layout background as a standard image format (PNG/JPG).")
     
     template_file = st.file_uploader("Upload Blank Template Image (PNG or JPG only)", type=["png", "jpg", "jpeg"])
     excel_file = st.file_uploader("Upload Student Excel Sheet (.xlsx)", type=["xlsx"], key="main_bulk_excel")
@@ -174,29 +178,32 @@ with tab3:
         headers = [c.value for c in ws[1] if c.value is not None]
         rows = list(ws.iter_rows(min_row=2, values_only=True))
         
-        st.info(f"Columns found: {', '.join(headers)}")
+        st.info(f"Detected columns from Excel file: {', '.join(headers)}")
+        st.write(f"Total rows discovered: **{len(rows)}** records.")
+        
+        st.write("### 3. Coordinate Position Configuration Settings (X, Y Axes)")
         
         positions = {}
         for index, h in enumerate(headers):
-            st.markdown(f"**⚙️ Settings for column: `{{{{{h}}}}}`**")
+            st.markdown(f"**⚙️ Position Strategy Configurations for column: `{{{{{h}}}}}`**")
             cx, cy, cs, ca = st.columns([2, 2, 2, 2])
             with cx:
-                x_pos = st.number_input(f"X Position - {h}", min_value=0, max_value=W, value=int(W/2), key=f"bx_{h}")
+                x_pos = st.number_input(f"X (Horizontal Axis) - {h}", min_value=0, max_value=W, value=int(W/2), key=f"bx_{h}")
             with cy:
-                y_pos = st.number_input(f"Y Position - {h}", min_value=0, max_value=H, value=int(H/2) + (index * 70) - 100, key=f"by_{h}")
+                y_pos = st.number_input(f"Y (Vertical Axis) - {h}", min_value=0, max_value=H, value=int(H/2) + (index * 70) - 100, key=f"by_{h}")
             with cs:
-                f_size = st.number_input(f"Font Size - {h}", min_value=10, max_value=200, value=32, key=f"bs_{h}")
+                f_size = st.number_input(f"Font Size Limit - {h}", min_value=10, max_value=200, value=32, key=f"bs_{h}")
             with ca:
-                align_type = st.selectbox(f"Text Align - {h}", options=["Center", "Left"], key=f"ba_{h}")
+                align_type = st.selectbox(f"Data Alignment Alignment Type - {h}", options=["Center", "Left"], key=f"ba_{h}")
             
             positions[h] = {"x": x_pos, "y": y_pos, "size": f_size, "align": align_type}
             st.markdown("<br>", unsafe_with_html=True)
             
-        name_col = st.selectbox("கோப்புகளுக்கு பெயரிட எந்த பத்தியைப் பயன்படுத்த வேண்டும்? (File Name)", options=headers)
+        name_col = st.selectbox("Select column header to use for individual document filenames:", options=headers)
 
-        if st.button(f"🚀 Generate All {len(rows)} Custom PDF Documents"):
+        if st.button(f"🚀 Mass Generate All {len(rows)} Custom PDF Files"):
             zip_buf = io.BytesIO()
-            progress = st.progress(0, text="Generating documents...")
+            progress = st.progress(0, text="Processing files dynamically...")
 
             with zipfile.ZipFile(zip_buf, "w") as zf:
                 for idx, row in enumerate(rows):
@@ -228,13 +235,13 @@ with tab3:
                     pdf_out = io.BytesIO()
                     img_copy.save(pdf_out, format="PDF")
                     
-                    fname = str(rowdict.get(name_col, f"student_{idx+1}")).replace(" ", "_").replace("/", "-")
+                    fname = str(rowdict.get(name_col, f"file_{idx+1}")).replace(" ", "_").replace("/", "-")
                     zf.writestr(f"{fname}.pdf", pdf_out.getvalue())
                     
-                    progress.progress((idx + 1) / len(rows), text=f"Generated {idx+1}/{len(rows)}")
+                    progress.progress((idx + 1) / len(rows), text=f"Processed metadata item {idx+1}/{len(rows)}")
                     
-            st.success("அனைத்து ஆவணங்களும் வெற்றிகரமாகத் தயார் செய்யப்பட்டுவிட்டன!")
-            st.download_button("⬇️ Download All PDFs as ZIP", data=zip_buf.getvalue(), file_name="bulk_custom_documents.zip", mime="application/zip", use_container_width=True)
+            st.success("All dynamic file operations executed cleanly!")
+            st.download_button("⬇️ Download All Extracted Files as ZIP", data=zip_buf.getvalue(), file_name="bulk_generated_documents.zip", mime="application/zip", use_container_width=True)
 
 st.divider()
-st.caption("HandyWriter Ultimate · Safe, Local Processing inside Streamlit Cloud.")
+st.caption("HandyWriter Ultimate Pro · Secure Sandbox Local Instance Execution.")
