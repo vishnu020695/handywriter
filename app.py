@@ -178,6 +178,27 @@ with tab2:
                 if find_val.strip():
                     fr_pairs.append((find_val, replace_val))
 
+            st.write("**Font settings for the replacement text:**")
+            cf1, cf2, cf3 = st.columns(3)
+            with cf1:
+                font_choice = st.selectbox(
+                    "Font", ["Default (Helvetica)", "Times New Roman", "Courier (monospace)"],
+                    key="fr_font_choice",
+                )
+            with cf2:
+                fr_bold = st.checkbox("Bold", key="fr_bold")
+            with cf3:
+                fr_size_override = st.number_input(
+                    "Font size (0 = auto-match original)", min_value=0, max_value=200, value=0, key="fr_size"
+                )
+
+            _font_map = {
+                "Default (Helvetica)": {"regular": "helv", "bold": "hebo"},
+                "Times New Roman": {"regular": "tiro", "bold": "tibo"},
+                "Courier (monospace)": {"regular": "cour", "bold": "cobo"},
+            }
+            fr_fontname = _font_map[font_choice]["bold" if fr_bold else "regular"]
+
             if st.button("🔍 Preview matches (see which pages, before replacing)"):
                 if not fr_pairs:
                     st.warning("Enter at least one 'Find' value.")
@@ -224,6 +245,8 @@ with tab2:
                                     fontsize = metrics["blocks"][0]["lines"][0]["spans"][0]["size"]
                                 except Exception:
                                     pass
+                                if fr_size_override > 0:
+                                    fontsize = fr_size_override
                                 page.add_redact_annot(rect, fill=(1, 1, 1))
                                 page.apply_redactions()
                                 padded = fitz.Rect(
@@ -233,11 +256,11 @@ with tab2:
                                 )
                                 padded.y1 = min(padded.y1 + fontsize * 3, page_rect.height - 20)
                                 size = fontsize
-                                rc = page.insert_textbox(padded, replace_val, fontsize=size, fontname="helv")
+                                rc = page.insert_textbox(padded, replace_val, fontsize=size, fontname=fr_fontname)
                                 tries = 0
                                 while rc < 0 and size > 6 and tries < 8:
                                     size -= 1
-                                    rc = page.insert_textbox(padded, replace_val, fontsize=size, fontname="helv")
+                                    rc = page.insert_textbox(padded, replace_val, fontsize=size, fontname=fr_fontname)
                                     tries += 1
                                 total_replacements += 1
                     if total_replacements == 0:
@@ -307,6 +330,27 @@ with tab2:
                     )
                     edited_values.append(val)
 
+                st.write("**Font settings for edited boxes:**")
+                lf1, lf2, lf3 = st.columns(3)
+                with lf1:
+                    line_font_choice = st.selectbox(
+                        "Font", ["Default (Helvetica)", "Times New Roman", "Courier (monospace)"],
+                        key=f"line_font_choice_{page_index}",
+                    )
+                with lf2:
+                    line_bold = st.checkbox("Bold", key=f"line_bold_{page_index}")
+                with lf3:
+                    line_size_override = st.number_input(
+                        "Font size (0 = auto-match original)", min_value=0, max_value=200, value=0,
+                        key=f"line_size_{page_index}",
+                    )
+                _line_font_map = {
+                    "Default (Helvetica)": {"regular": "helv", "bold": "hebo"},
+                    "Times New Roman": {"regular": "tiro", "bold": "tibo"},
+                    "Courier (monospace)": {"regular": "cour", "bold": "cobo"},
+                }
+                line_fontname = _line_font_map[line_font_choice]["bold" if line_bold else "regular"]
+
                 if st.button("Apply edits to this page and download"):
                     changed_any = False
                     edits = []  # (bbox, new_text, fontsize)
@@ -314,7 +358,8 @@ with tab2:
                         original_text = line_text.rstrip("\n")
                         if new_val != original_text:
                             changed_any = True
-                            edits.append((fitz.Rect(bbox), new_val, fontsize))
+                            use_size = line_size_override if line_size_override > 0 else fontsize
+                            edits.append((fitz.Rect(bbox), new_val, use_size))
 
                     if not changed_any:
                         st.info("No changes were made.")
@@ -333,7 +378,7 @@ with tab2:
                             )
                             padded.y1 = min(padded.y1 + fontsize * 3, page_rect.height - 20)
                             size = fontsize
-                            rc = page.insert_textbox(padded, new_val, fontsize=size, fontname="helv")
+                            rc = page.insert_textbox(padded, new_val, fontsize=size, fontname=line_fontname)
                             tries = 0
                             while rc < 0 and size > 6 and tries < 8:
                                 size -= 1
@@ -655,7 +700,7 @@ with tab3:
             positions = {}
             for idx, h in enumerate(headers):
                 st.markdown(f"**Field: `{h}`**")
-                cx, cy, cs, ca = st.columns(4)
+                cx, cy, cs, ca, cb = st.columns(5)
                 with cx:
                     x_pos = st.number_input(f"X — {h}", min_value=0, max_value=W, value=int(W * 0.3), key=f"cx_{h}")
                 with cy:
@@ -664,7 +709,9 @@ with tab3:
                     f_size = st.number_input(f"Font size — {h}", min_value=8, max_value=200, value=28, key=f"cs_{h}")
                 with ca:
                     align_type = st.selectbox(f"Align — {h}", options=["Left", "Center"], key=f"ca_{h}")
-                positions[h] = {"x": x_pos, "y": y_pos, "size": f_size, "align": align_type}
+                with cb:
+                    bold_type = st.checkbox("Bold", key=f"cb_{h}")
+                positions[h] = {"x": x_pos, "y": y_pos, "size": f_size, "align": align_type, "bold": bold_type}
 
             folder_col2 = st.selectbox(
                 "Sort output into folders by column? (optional)",
@@ -675,13 +722,21 @@ with tab3:
                 "Use which column to name each file?", options=[str(h) for h in headers], key="coord_name_col"
             )
 
-            font_path = None
+            font_path_regular = None
+            font_path_bold = None
             for candidate in [
                 "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
                 "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
             ]:
                 if os.path.exists(candidate):
-                    font_path = candidate
+                    font_path_regular = candidate
+                    break
+            for candidate in [
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+            ]:
+                if os.path.exists(candidate):
+                    font_path_bold = candidate
                     break
 
             if st.button(f"🚀 Generate all {len(rows)} personalized files", key="coord_generate"):
@@ -694,8 +749,9 @@ with tab3:
                         draw = ImageDraw.Draw(img_copy)
                         for h, pos in positions.items():
                             text_val = str(rowdict.get(h, "") if rowdict.get(h) is not None else "")
+                            chosen_path = font_path_bold if pos.get("bold") and font_path_bold else font_path_regular
                             try:
-                                font = ImageFont.truetype(font_path, pos["size"]) if font_path else ImageFont.load_default()
+                                font = ImageFont.truetype(chosen_path, pos["size"]) if chosen_path else ImageFont.load_default()
                             except Exception:
                                 font = ImageFont.load_default()
                             left, top, right, bottom = draw.textbbox((0, 0), text_val, font=font)
