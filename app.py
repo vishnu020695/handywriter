@@ -514,9 +514,16 @@ with tab2:
                                 # is what previously caused either shrinking
                                 # (underestimate) or spilling into neighboring
                                 # text like a dash or the next word (overshoot).
+                                # No flat safety margin is added anymore: since
+                                # the measurement is now accurate, any extra
+                                # padding just shows up as a visible blank gap
+                                # before whatever character comes right after
+                                # (e.g. "2066  -" instead of "2066 -") — which
+                                # is exactly the kind of seam that makes an
+                                # edit look like an edit. Only widen the box
+                                # when the new text genuinely needs more room.
                                 est_w = _measure_width(replace_val, use_fontname, fontsize)
-                                safety_margin = max(fontsize * 0.15, 2)
-                                extra_w = max(0, est_w - rect.width) + safety_margin
+                                extra_w = max(0, est_w - rect.width)
                                 # Vertical padding scales with fontsize (not a
                                 # fixed 1px) — too tight a box also forces
                                 # PyMuPDF to auto-shrink text below its real size.
