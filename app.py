@@ -615,9 +615,9 @@ with tab2:
                     pages_hit = sorted(set(r[0] + 1 for r in results))
                     st.write(f"Found on page(s): **{', '.join(str(p) for p in pages_hit)}** "
                              f"({len(results)} matching line(s) total). Click one to jump straight there:")
-                    for pi, snippet in results[:40]:
+                    for result_idx, (pi, snippet) in enumerate(results[:40]):
                         label = f"Page {pi + 1}: {snippet[:80]}"
-                        if st.button(label, key=f"jump_{pi}_{snippet[:30]}"):
+                        if st.button(label, key=f"jump_{result_idx}_{pi}"):
                             st.session_state["el_page_num"] = pi + 1
                             st.session_state[f"line_search_{pi}"] = global_query
                             st.rerun()
