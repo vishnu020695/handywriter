@@ -338,18 +338,6 @@ with tab2:
                 if italic: return "heit"
                 return "helv"
 
-            def _is_filler_span(text):
-                """Detect blank-line filler such as long underscore runs used
-                for 'fill in the blank' fields (e.g. the name/department lines
-                on a certificate). These must NEVER be merged with a nearby
-                match — merging across them is what caused whole rows to be
-                redacted and then fail to fit back in, leaving a blank line."""
-                stripped = text.replace(" ", "")
-                if not stripped:
-                    return True
-                filler_chars = set("_.-")
-                return len(stripped) >= 3 and all(ch in filler_chars for ch in stripped)
-
             def _find_line_for_rect(page, rect):
                 """Return the full text line dict that contains rect."""
                 text_dict = page.get_text("dict")
@@ -413,46 +401,6 @@ with tab2:
                     pass
                 return None
 
-            def _isolated_scope_with_fillers(line, rect):
-                """For an isolated match (no real-word neighbor to merge with),
-                pull in any immediately adjacent filler spans (blank underscore
-                runs) so they get redacted AND redrawn together with the match.
-                Without this, redacting only the name's own tight bbox can also
-                wipe out underscore ink that happened to sit in that exact
-                footprint, leaving a gap in the blank line that never gets
-                repainted. Returns (expanded_rect, [(text, bbox, font, size), ...])
-                where the list is the unchanged filler pieces to redraw as-is."""
-                if not line or not line.get("spans"):
-                    return fitz.Rect(rect), []
-                spans = line["spans"]
-                match_idx = None
-                for i, s in enumerate(spans):
-                    if fitz.Rect(s["bbox"]).intersects(rect):
-                        match_idx = i
-                        break
-                if match_idx is None:
-                    return fitz.Rect(rect), []
-
-                fillers = []
-                x0 = fitz.Rect(rect).x0
-                x1 = fitz.Rect(rect).x1
-                y0 = fitz.Rect(rect).y0
-                y1 = fitz.Rect(rect).y1
-
-                if match_idx - 1 >= 0 and _is_filler_span(spans[match_idx - 1]["text"]):
-                    s = spans[match_idx - 1]
-                    b = fitz.Rect(s["bbox"])
-                    fillers.append((s["text"], b, s.get("font"), s["size"]))
-                    x0 = min(x0, b.x0); y0 = min(y0, b.y0); y1 = max(y1, b.y1)
-
-                if match_idx + 1 < len(spans) and _is_filler_span(spans[match_idx + 1]["text"]):
-                    s = spans[match_idx + 1]
-                    b = fitz.Rect(s["bbox"])
-                    fillers.append((s["text"], b, s.get("font"), s["size"]))
-                    x1 = max(x1, b.x1); y0 = min(y0, b.y0); y1 = max(y1, b.y1)
-
-                return fitz.Rect(x0, y0, x1, y1), fillers
-
             if st.button("Apply Find & Replace to entire PDF"):
                 if not fr_pairs:
                     st.warning("Enter at least one 'Find' value.")
@@ -460,23 +408,19 @@ with tab2:
                     total_replacements = 0
                     for page in doc_pdf:
                         page_rect = page.rect
+                        annots_queued = 0
+                        # Queue EVERY match for EVERY find/replace pair FIRST,
+                        # all measured against the original, untouched page —
+                        # then apply them all in one atomic pass at the end.
+                        # This is the key fix: nothing is redrawn until every
+                        # match has already been located, so an earlier
+                        # replacement can never shift the page and invalidate
+                        # a later match's coordinates (which is what caused
+                        # the repeated "202 2027 202 2027" corruption before).
                         for find_val, replace_val in fr_pairs:
-                            # Re-fetch the match fresh EVERY time, right before
-                            # touching it, so stale coordinates from an earlier
-                            # replacement on the same page can never cause a
-                            # later one to land on the wrong text.
-                            guard = 0
-                            max_iterations = len(page.search_for(find_val)) + 3
-                            while guard < max_iterations:
-                                guard += 1
-                                rects = page.search_for(find_val)
-                                if not rects:
-                                    break
-                                rect = rects[0]
+                            rects = page.search_for(find_val)
+                            for rect in rects:
                                 line = _find_line_for_rect(page, rect)
-
-                                # font metrics from the SPAN THAT ACTUALLY
-                                # CONTAINS THE MATCH
                                 fontsize = 11
                                 span_font_name = None
                                 span_flags = 0
@@ -490,16 +434,6 @@ with tab2:
                                 if fr_size_override > 0:
                                     fontsize = fr_size_override
 
-                                # Only ever touch the EXACT matched text, plus any
-                                # immediately adjacent filler (blank underscores)
-                                # so a blank line stays continuous. We deliberately
-                                # never try to merge with real neighboring words —
-                                # that repeatedly proved unsafe to get right without
-                                # being able to inspect this PDF's actual internal
-                                # text-span layout live.
-                                new_text = replace_val
-                                target_rect, fillers = _isolated_scope_with_fillers(line, rect)
-
                                 use_fontname = fr_fontname
                                 if font_choice == "Default (Helvetica)" and span_font_name:
                                     embedded_alias = _embedded_font_alias(page, span_font_name, want_bold=fr_bold)
@@ -509,38 +443,35 @@ with tab2:
                                         effective_flags = span_flags | 16 if fr_bold else span_flags
                                         use_fontname = _flags_to_base14(effective_flags, serif_hint=True)
 
-                                page.add_redact_annot(target_rect, fill=(1, 1, 1))
-                                page.apply_redactions()
-
-                                # Redraw any filler pieces we had to erase, exactly
-                                # as they were, so the blank line stays continuous.
-                                for f_text, f_bbox, f_font, f_size in fillers:
-                                    f_alias = _embedded_font_alias(page, f_font, want_bold=False) or "tiro"
-                                    page.insert_textbox(f_bbox, f_text, fontsize=f_size, fontname=f_alias)
-
-                                # Pad width only enough to fit a longer replacement
-                                # word, height only a touch.
-                                match_rect = fitz.Rect(rect)
-                                extra_w = max(0, fitz.get_text_length(new_text, fontname="helv", fontsize=fontsize)
-                                               - match_rect.width) + 6
-                                padded = fitz.Rect(
-                                    match_rect.x0, match_rect.y0 - 1,
-                                    min(match_rect.x1 + extra_w, page_rect.width - 10),
-                                    min(match_rect.y1 + fontsize * 0.3, page_rect.height - 10),
+                                # widen the box a touch if the replacement is
+                                # longer than the original, so PyMuPDF's own
+                                # text-fit doesn't have to shrink unnecessarily.
+                                # We only ever touch this exact match's own box —
+                                # never anything beside it — so neighboring
+                                # underscores/words are simply never disturbed.
+                                extra_w = max(0, fitz.get_text_length(replace_val, fontname="helv", fontsize=fontsize)
+                                               - rect.width) + 4
+                                box = fitz.Rect(
+                                    rect.x0, rect.y0 - 1,
+                                    min(rect.x1 + extra_w, page_rect.width - 5),
+                                    rect.y1 + 1,
                                 )
-                                size = fontsize
-                                rc = page.insert_textbox(padded, new_text, fontsize=size, fontname=use_fontname)
-                                tries = 0
-                                while rc < 0 and size > 6 and tries < 8:
-                                    size -= 1
-                                    rc = page.insert_textbox(padded, new_text, fontsize=size, fontname=use_fontname)
-                                    tries += 1
 
-                                # Hard safety net: never leave it blank.
-                                if rc < 0:
-                                    baseline = fitz.Point(padded.x0, padded.y1 - fontsize * 0.15)
-                                    page.insert_text(baseline, new_text, fontsize=max(size, 6), fontname=use_fontname)
+                                page.add_redact_annot(
+                                    box,
+                                    text=replace_val,
+                                    fontname=use_fontname,
+                                    fontsize=fontsize,
+                                    align=fitz.TEXT_ALIGN_LEFT,
+                                    fill=(1, 1, 1),
+                                    text_color=(0, 0, 0),
+                                )
+                                annots_queued += 1
                                 total_replacements += 1
+
+                        if annots_queued:
+                            page.apply_redactions()
+
                     if total_replacements == 0:
                         st.warning("None of the 'Find' text was found in this PDF. Check spelling/spacing matches exactly.")
                     else:
