@@ -454,6 +454,42 @@ with tab2:
                     out.append((s["text"], fitz.Rect(s["bbox"]), s.get("font"), s["size"]))
                 return out
 
+            def _sample_bg_color(page_pixmap, mat, rect):
+                """Sample the certificate's ACTUAL local paper color near this
+                rect, instead of hardcoding pure white. Certificates almost
+                always have a slightly off-white/warm background (and often a
+                faint watermark), so filling a redaction with pure white shows
+                up as a visibly brighter rectangle — exactly the giveaway that
+                makes an edit look like an edit. Uses a pixmap snapshot taken
+                BEFORE any redactions were queued on this page, so an earlier
+                queued (but not-yet-applied) redaction can never bleed into a
+                later match's color sample."""
+                try:
+                    strip = fitz.Rect(rect.x0 - 4, rect.y0, rect.x0 - 1, rect.y1)
+                    if strip.x0 < 0 or strip.width <= 0:
+                        strip = fitz.Rect(rect.x1 + 1, rect.y0, rect.x1 + 4, rect.y1)
+                    p0 = strip.tl * mat
+                    p1 = strip.br * mat
+                    x0, y0 = max(0, int(p0.x)), max(0, int(p0.y))
+                    x1, y1 = min(page_pixmap.width, int(p1.x)), min(page_pixmap.height, int(p1.y))
+                    if x1 <= x0 or y1 <= y0:
+                        return (1, 1, 1)
+                    samples = page_pixmap.samples
+                    step = page_pixmap.n
+                    stride = page_pixmap.stride
+                    r = g = b = count = 0
+                    for yy in range(y0, y1):
+                        row_start = yy * stride
+                        for xx in range(x0, x1):
+                            idx = row_start + xx * step
+                            r += samples[idx]; g += samples[idx + 1]; b += samples[idx + 2]
+                            count += 1
+                    if count == 0:
+                        return (1, 1, 1)
+                    return (r / count / 255.0, g / count / 255.0, b / count / 255.0)
+                except Exception:
+                    return (1, 1, 1)
+
             if st.button("Apply Find & Replace to entire PDF"):
                 if not fr_pairs:
                     st.warning("Enter at least one 'Find' value.")
@@ -462,6 +498,12 @@ with tab2:
                     for page in doc_pdf:
                         page_rect = page.rect
                         annots_queued = 0
+                        # Snapshot the page's appearance BEFORE any redaction is
+                        # queued, so background-color sampling for the "blend
+                        # into the paper" fix always reflects the true original
+                        # page, never a preview of an already-queued redaction.
+                        bg_mat = fitz.Matrix(3, 3)
+                        bg_pixmap = page.get_pixmap(matrix=bg_mat)
                         # Queue EVERY match for EVERY find/replace pair FIRST,
                         # all measured against the original, untouched page —
                         # then apply them all in one atomic pass at the end.
@@ -544,24 +586,26 @@ with tab2:
                                 for f_text, f_bbox, f_font, f_size in _adjacent_fillers(line, rect):
                                     if box.intersects(f_bbox):
                                         f_alias = _embedded_font_alias(page, f_font, want_bold=False) or "tiro"
+                                        f_bg = _sample_bg_color(bg_pixmap, bg_mat, f_bbox)
                                         page.add_redact_annot(
                                             f_bbox,
                                             text=f_text,
                                             fontname=f_alias,
                                             fontsize=f_size,
                                             align=fitz.TEXT_ALIGN_LEFT,
-                                            fill=(1, 1, 1),
+                                            fill=f_bg,
                                             text_color=(0, 0, 0),
                                         )
                                         annots_queued += 1
 
+                                match_bg = _sample_bg_color(bg_pixmap, bg_mat, rect)
                                 page.add_redact_annot(
                                     box,
                                     text=replace_val,
                                     fontname=use_fontname,
                                     fontsize=fontsize,
                                     align=fitz.TEXT_ALIGN_LEFT,
-                                    fill=(1, 1, 1),
+                                    fill=match_bg,
                                     text_color=(0, 0, 0),
                                 )
                                 annots_queued += 1
