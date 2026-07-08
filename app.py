@@ -401,6 +401,40 @@ with tab2:
                     pass
                 return None
 
+            def _is_filler_span(text):
+                """Detect blank-line filler such as long underscore runs used
+                for 'fill in the blank' fields (e.g. the name/department lines
+                on a certificate)."""
+                stripped = text.replace(" ", "")
+                if not stripped:
+                    return True
+                filler_chars = set("_.-")
+                return len(stripped) >= 3 and all(ch in filler_chars for ch in stripped)
+
+            def _adjacent_fillers(line, rect):
+                """Return the immediately adjacent filler spans (left/right) of
+                the span containing rect, as (text, bbox, font, size) tuples —
+                so callers can re-queue them for redraw whenever a wider
+                replacement's box might encroach on that blank-line ink."""
+                if not line or not line.get("spans"):
+                    return []
+                spans = line["spans"]
+                match_idx = None
+                for i, s in enumerate(spans):
+                    if fitz.Rect(s["bbox"]).intersects(rect):
+                        match_idx = i
+                        break
+                if match_idx is None:
+                    return []
+                out = []
+                if match_idx - 1 >= 0 and _is_filler_span(spans[match_idx - 1]["text"]):
+                    s = spans[match_idx - 1]
+                    out.append((s["text"], fitz.Rect(s["bbox"]), s.get("font"), s["size"]))
+                if match_idx + 1 < len(spans) and _is_filler_span(spans[match_idx + 1]["text"]):
+                    s = spans[match_idx + 1]
+                    out.append((s["text"], fitz.Rect(s["bbox"]), s.get("font"), s["size"]))
+                return out
+
             if st.button("Apply Find & Replace to entire PDF"):
                 if not fr_pairs:
                     st.warning("Enter at least one 'Find' value.")
@@ -455,23 +489,45 @@ with tab2:
                                         effective_flags = span_flags | 16 if fr_bold else span_flags
                                         use_fontname = _flags_to_base14(effective_flags, serif_hint=True)
 
-                                # widen the box a touch if the replacement is
-                                # longer than the original, so PyMuPDF's own
-                                # text-fit doesn't have to shrink unnecessarily.
-                                # We only ever touch this exact match's own box —
-                                # never anything beside it — so neighboring
-                                # underscores/words are simply never disturbed.
-                                extra_w = max(0, fitz.get_text_length(replace_val, fontname="helv", fontsize=fontsize)
-                                               - rect.width) + 4
+                                # Estimate the replacement's width generously —
+                                # get_text_length("helv") systematically
+                                # underestimates bold/serif fonts, and an
+                                # underestimate here was the real reason
+                                # PyMuPDF kept auto-shrinking replacement text
+                                # to fit a box that was actually too narrow.
+                                est_w = fitz.get_text_length(replace_val, fontname="helv", fontsize=fontsize)
+                                safety_margin = max(fontsize * 0.9, est_w * 0.35, 8)
+                                extra_w = max(0, est_w - rect.width) + safety_margin
                                 # Vertical padding scales with fontsize (not a
-                                # fixed 1px) — too tight a box is what forced
+                                # fixed 1px) — too tight a box also forces
                                 # PyMuPDF to auto-shrink text below its real size.
-                                vpad = fontsize * 0.25
+                                vpad = fontsize * 0.3
+                                box_x1 = min(rect.x1 + extra_w, page_rect.width - 5)
                                 box = fitz.Rect(
                                     rect.x0, rect.y0 - vpad,
-                                    min(rect.x1 + extra_w, page_rect.width - 5),
+                                    box_x1,
                                     rect.y1 + vpad,
                                 )
+
+                                # If this widened box now reaches into an
+                                # adjacent blank-line filler (underscores),
+                                # queue that filler for redraw too — unchanged
+                                # text, same spot — so the blank line stays
+                                # continuous instead of losing ink where the
+                                # box overlapped it.
+                                for f_text, f_bbox, f_font, f_size in _adjacent_fillers(line, rect):
+                                    if box.intersects(f_bbox):
+                                        f_alias = _embedded_font_alias(page, f_font, want_bold=False) or "tiro"
+                                        page.add_redact_annot(
+                                            f_bbox,
+                                            text=f_text,
+                                            fontname=f_alias,
+                                            fontsize=f_size,
+                                            align=fitz.TEXT_ALIGN_LEFT,
+                                            fill=(1, 1, 1),
+                                            text_color=(0, 0, 0),
+                                        )
+                                        annots_queued += 1
 
                                 page.add_redact_annot(
                                     box,
