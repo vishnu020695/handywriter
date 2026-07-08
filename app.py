@@ -431,6 +431,18 @@ with tab2:
                                             span_font_name = s.get("font")
                                             span_flags = s.get("flags", 0)
                                             break
+
+                                # Sanity-check the detected font size against the
+                                # match's own rectangle height (a hard geometric
+                                # fact from search_for, always reliable). If the
+                                # span lookup returned something implausibly
+                                # small — e.g. it grabbed a neighboring span with
+                                # different metrics — this is what made replaced
+                                # numbers render tiny and float like superscript.
+                                height_based_size = rect.height / 1.15
+                                if fontsize < height_based_size * 0.7:
+                                    fontsize = height_based_size
+
                                 if fr_size_override > 0:
                                     fontsize = fr_size_override
 
@@ -451,10 +463,14 @@ with tab2:
                                 # underscores/words are simply never disturbed.
                                 extra_w = max(0, fitz.get_text_length(replace_val, fontname="helv", fontsize=fontsize)
                                                - rect.width) + 4
+                                # Vertical padding scales with fontsize (not a
+                                # fixed 1px) — too tight a box is what forced
+                                # PyMuPDF to auto-shrink text below its real size.
+                                vpad = fontsize * 0.25
                                 box = fitz.Rect(
-                                    rect.x0, rect.y0 - 1,
+                                    rect.x0, rect.y0 - vpad,
                                     min(rect.x1 + extra_w, page_rect.width - 5),
-                                    rect.y1 + 1,
+                                    rect.y1 + vpad,
                                 )
 
                                 page.add_redact_annot(
