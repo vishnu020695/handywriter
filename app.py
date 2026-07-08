@@ -610,7 +610,26 @@ with tab2:
                         fontsize = line["spans"][0]["size"] if line["spans"] else 11
                         lines_data.append((line["bbox"], line_text, fontsize))
 
-            # Draw numbered boxes on the preview so boxes map visually to the page
+            search_query = st.text_input(
+                "🔍 Type part of the text you want to change (leave empty to see every box)",
+                key=f"line_search_{page_index}",
+            )
+            if search_query.strip():
+                matching_idx = {
+                    i for i, (_, text, _) in enumerate(lines_data)
+                    if search_query.strip().lower() in text.lower()
+                }
+                if not matching_idx:
+                    st.warning("No text on this page matches that — showing every box instead.")
+                    matching_idx = set(range(len(lines_data)))
+            else:
+                matching_idx = set(range(len(lines_data)))
+
+            # Draw numbered boxes on the preview so boxes map visually to the page.
+            # Matches (or everything, if no search yet) are outlined in red and
+            # numbered; anything filtered out by the search is a faint gray so the
+            # page doesn't turn into unreadable clutter but you can still see where
+            # everything sits.
             zoom = 1.3
             pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
             from PIL import Image as PILImage, ImageDraw
@@ -618,8 +637,11 @@ with tab2:
             draw = ImageDraw.Draw(preview_img)
             for i, (bbox, _, _) in enumerate(lines_data):
                 x0, y0, x1, y1 = [v * zoom for v in bbox]
-                draw.rectangle([x0, y0, x1, y1], outline="red", width=2)
-                draw.text((x0, max(0, y0 - 14)), f"#{i + 1}", fill="red")
+                if i in matching_idx:
+                    draw.rectangle([x0, y0, x1, y1], outline="red", width=2)
+                    draw.text((x0, max(0, y0 - 14)), f"#{i + 1}", fill="red")
+                else:
+                    draw.rectangle([x0, y0, x1, y1], outline=(200, 200, 200), width=1)
             st.image(preview_img, caption=f"Page {page_num} — boxes numbered to match the list below", width=500)
 
             if not lines_data:
@@ -628,10 +650,19 @@ with tab2:
                     "Use the 'Image → Word/Excel' tab instead, or the PDF-to-Word conversion below."
                 )
             else:
-                st.write(f"**{len(lines_data)}** editable text lines found on this page:")
+                shown_count = len(matching_idx)
+                if search_query.strip():
+                    st.write(f"**{shown_count}** of {len(lines_data)} boxes match — only these are shown below:")
+                else:
+                    st.write(f"**{len(lines_data)}** editable text lines found on this page:")
                 edited_values = []
                 for i, (bbox, line_text, fontsize) in enumerate(lines_data):
                     original_text = line_text.rstrip("\n")
+                    if i not in matching_idx:
+                        # keep the value unchanged for boxes hidden by the filter,
+                        # but don't render a text_area for them so the list stays short
+                        edited_values.append(original_text)
+                        continue
                     val = st.text_area(
                         f"Box #{i + 1}", original_text, height=68, key=f"line_{page_index}_{i}"
                     )
