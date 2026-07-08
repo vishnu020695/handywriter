@@ -353,6 +353,8 @@ with tab2:
                         break
                 return best
 
+            font_buffer_cache = {}
+
             def _embedded_font_alias(page, span_font_name, want_bold=False):
                 """Try to pull the ACTUAL embedded font used by the original text,
                 so the replacement matches the certificate's real typeface instead
@@ -374,6 +376,7 @@ with tab2:
                                 if fontbuffer:
                                     alias = f"embedded_{xref}"
                                     page.insert_font(fontname=alias, fontbuffer=fontbuffer)
+                                    font_buffer_cache[alias] = fontbuffer
                                     return alias
                         # 2) the original font itself is already bold-named
                         if span_font_name and "bold" in span_font_name.lower():
@@ -383,6 +386,7 @@ with tab2:
                                     if fontbuffer:
                                         alias = f"embedded_{xref}"
                                         page.insert_font(fontname=alias, fontbuffer=fontbuffer)
+                                        font_buffer_cache[alias] = fontbuffer
                                         return alias
                         # no real bold variant embedded in this PDF — tell the caller
                         # so it can fall back to a synthetic bold instead of silently
@@ -396,10 +400,25 @@ with tab2:
                             if fontbuffer:
                                 alias = f"embedded_{xref}"
                                 page.insert_font(fontname=alias, fontbuffer=fontbuffer)
+                                font_buffer_cache[alias] = fontbuffer
                                 return alias
                 except Exception:
                     pass
                 return None
+
+            def _measure_width(text, fontname, fontsize):
+                """Measure text width using the ACTUAL font it will be drawn
+                in, not a generic Helvetica guess. Using the wrong font's
+                metrics is what caused the width estimate to be badly off —
+                too small (text got shrunk to fit) or, when over-compensated
+                with a flat safety margin, too large (the box spilled into
+                neighboring real text like a dash or the next word)."""
+                try:
+                    if fontname in font_buffer_cache:
+                        return fitz.Font(fontbuffer=font_buffer_cache[fontname]).text_length(text, fontsize=fontsize)
+                    return fitz.Font(fontname=fontname).text_length(text, fontsize=fontsize)
+                except Exception:
+                    return fitz.get_text_length(text, fontname="helv", fontsize=fontsize)
 
             def _is_filler_span(text):
                 """Detect blank-line filler such as long underscore runs used
@@ -489,14 +508,14 @@ with tab2:
                                         effective_flags = span_flags | 16 if fr_bold else span_flags
                                         use_fontname = _flags_to_base14(effective_flags, serif_hint=True)
 
-                                # Estimate the replacement's width generously —
-                                # get_text_length("helv") systematically
-                                # underestimates bold/serif fonts, and an
-                                # underestimate here was the real reason
-                                # PyMuPDF kept auto-shrinking replacement text
-                                # to fit a box that was actually too narrow.
-                                est_w = fitz.get_text_length(replace_val, fontname="helv", fontsize=fontsize)
-                                safety_margin = max(fontsize * 0.9, est_w * 0.35, 8)
+                                # Measure the replacement using its ACTUAL font
+                                # (embedded font or the real Base-14 we picked),
+                                # not a generic Helvetica guess — that mismatch
+                                # is what previously caused either shrinking
+                                # (underestimate) or spilling into neighboring
+                                # text like a dash or the next word (overshoot).
+                                est_w = _measure_width(replace_val, use_fontname, fontsize)
+                                safety_margin = max(fontsize * 0.15, 2)
                                 extra_w = max(0, est_w - rect.width) + safety_margin
                                 # Vertical padding scales with fontsize (not a
                                 # fixed 1px) — too tight a box also forces
