@@ -590,8 +590,45 @@ with tab2:
                 "Edit any box, then apply — text is placed in the same spot and size, "
                 "so nothing shifts or misaligns."
             )
+
+            st.markdown("##### 🔍 Find it first — search every page")
+            st.caption(
+                "On a multi-page document it's much faster to search across all pages "
+                "than to open each one and hunt through its boxes."
+            )
+            global_query = st.text_input(
+                "Search across ALL pages for text you want to edit", key="el_global_query"
+            )
+            if global_query.strip():
+                q = global_query.strip().lower()
+                results = []  # (page_index, snippet)
+                for pi in range(doc_pdf.page_count):
+                    pg_td = doc_pdf[pi].get_text("dict")
+                    for db in pg_td["blocks"]:
+                        for ln in db.get("lines", []):
+                            txt = "".join(s["text"] for s in ln["spans"]).strip()
+                            if txt and q in txt.lower():
+                                results.append((pi, txt))
+                if not results:
+                    st.warning("That text wasn't found on any page.")
+                else:
+                    pages_hit = sorted(set(r[0] + 1 for r in results))
+                    st.write(f"Found on page(s): **{', '.join(str(p) for p in pages_hit)}** "
+                             f"({len(results)} matching line(s) total). Click one to jump straight there:")
+                    for pi, snippet in results[:40]:
+                        label = f"Page {pi + 1}: {snippet[:80]}"
+                        if st.button(label, key=f"jump_{pi}_{snippet[:30]}"):
+                            st.session_state["el_page_num"] = pi + 1
+                            st.session_state[f"line_search_{pi}"] = global_query
+                            st.rerun()
+                    if len(results) > 40:
+                        st.caption(f"...and {len(results) - 40} more matches not shown here.")
+            st.markdown("---")
+
+            if "el_page_num" not in st.session_state:
+                st.session_state["el_page_num"] = 1
             page_num = st.number_input(
-                "Page number to edit", min_value=1, max_value=doc_pdf.page_count, value=1
+                "Page number to edit", min_value=1, max_value=doc_pdf.page_count, key="el_page_num"
             )
             page_index = page_num - 1
             page = doc_pdf[page_index]
