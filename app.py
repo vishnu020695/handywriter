@@ -365,67 +365,6 @@ with tab2:
                         break
                 return best
 
-            def _merge_scope(line, rect, fontsize):
-                """Decide how much text around the match is safe to redraw
-                together. Only genuinely adjacent WORD spans get merged (e.g.
-                'Cognitive Skills' + 'Enhancement - I' sitting right next to
-                each other) — filler spans (blank underscore runs) stop the
-                merge immediately in that direction, so an isolated word like
-                a pre-filled name sitting between two long blanks is treated
-                on its own, not merged with the entire row.
-                Returns (scope_rect, scope_text_or_None, did_merge)."""
-                if not line or not line.get("spans"):
-                    return fitz.Rect(rect), None, False
-                spans = line["spans"]
-                match_idx = None
-                for i, s in enumerate(spans):
-                    if fitz.Rect(s["bbox"]).intersects(rect):
-                        match_idx = i
-                        break
-                if match_idx is None:
-                    return fitz.Rect(rect), None, False
-
-                gap_limit = fontsize * 4
-                included = [match_idx]
-
-                i = match_idx - 1
-                edge = fitz.Rect(spans[match_idx]["bbox"]).x0
-                while i >= 0:
-                    s = spans[i]
-                    if _is_filler_span(s["text"]):
-                        break
-                    gap = edge - fitz.Rect(s["bbox"]).x1
-                    if gap > gap_limit:
-                        break
-                    included.insert(0, i)
-                    edge = fitz.Rect(s["bbox"]).x0
-                    i -= 1
-
-                i = match_idx + 1
-                edge = fitz.Rect(spans[match_idx]["bbox"]).x1
-                while i < len(spans):
-                    s = spans[i]
-                    if _is_filler_span(s["text"]):
-                        break
-                    gap = fitz.Rect(s["bbox"]).x0 - edge
-                    if gap > gap_limit:
-                        break
-                    included.append(i)
-                    edge = fitz.Rect(s["bbox"]).x1
-                    i += 1
-
-                if len(included) == 1:
-                    # isolated match (e.g. a name sitting between two blanks) —
-                    # do NOT merge, just work with its own small box
-                    return fitz.Rect(rect), None, False
-
-                merged_text = "".join(spans[k]["text"] for k in included)
-                xs0 = min(fitz.Rect(spans[k]["bbox"]).x0 for k in included)
-                xs1 = max(fitz.Rect(spans[k]["bbox"]).x1 for k in included)
-                ys0 = min(fitz.Rect(spans[k]["bbox"]).y0 for k in included)
-                ys1 = max(fitz.Rect(spans[k]["bbox"]).y1 for k in included)
-                return fitz.Rect(xs0, ys0, xs1, ys1), merged_text, True
-
             def _embedded_font_alias(page, span_font_name, want_bold=False):
                 """Try to pull the ACTUAL embedded font used by the original text,
                 so the replacement matches the certificate's real typeface instead
@@ -523,14 +462,9 @@ with tab2:
                         page_rect = page.rect
                         for find_val, replace_val in fr_pairs:
                             # Re-fetch the match fresh EVERY time, right before
-                            # touching it. Pre-computing all match rectangles up
-                            # front and looping over them is unsafe: once the
-                            # first match is redrawn, the page reflows slightly
-                            # (different font metrics than the original), so any
-                            # later match's pre-recorded coordinates go stale and
-                            # can land on the wrong text entirely — this was
-                            # exactly what corrupted "November"/"course" when two
-                            # "2024"s sat on the same line.
+                            # touching it, so stale coordinates from an earlier
+                            # replacement on the same page can never cause a
+                            # later one to land on the wrong text.
                             guard = 0
                             max_iterations = len(page.search_for(find_val)) + 3
                             while guard < max_iterations:
@@ -541,10 +475,8 @@ with tab2:
                                 rect = rects[0]
                                 line = _find_line_for_rect(page, rect)
 
-                                # get font metrics from the SPAN THAT ACTUALLY
-                                # CONTAINS THE MATCH, not just the first span on
-                                # the line (those can differ, e.g. bold name vs
-                                # regular blank-line font)
+                                # font metrics from the SPAN THAT ACTUALLY
+                                # CONTAINS THE MATCH
                                 fontsize = 11
                                 span_font_name = None
                                 span_flags = 0
@@ -558,23 +490,16 @@ with tab2:
                                 if fr_size_override > 0:
                                     fontsize = fr_size_override
 
-                                scope_rect, scope_text, did_merge = _merge_scope(line, rect, fontsize)
-                                fillers = []
-                                if did_merge:
-                                    new_text = scope_text.replace(find_val, replace_val)
-                                    target_rect = scope_rect
-                                else:
-                                    # isolated match (e.g. name/department sitting
-                                    # between blank underscores) — touch ONLY its
-                                    # own box, but pull in any immediately
-                                    # adjacent filler (underscores) so the blank
-                                    # line stays continuous after the redraw
-                                    new_text = replace_val
-                                    target_rect, fillers = _isolated_scope_with_fillers(line, rect)
+                                # Only ever touch the EXACT matched text, plus any
+                                # immediately adjacent filler (blank underscores)
+                                # so a blank line stays continuous. We deliberately
+                                # never try to merge with real neighboring words —
+                                # that repeatedly proved unsafe to get right without
+                                # being able to inspect this PDF's actual internal
+                                # text-span layout live.
+                                new_text = replace_val
+                                target_rect, fillers = _isolated_scope_with_fillers(line, rect)
 
-                                # Try to reuse the document's ACTUAL font first;
-                                # only fall back to the user's chosen Base-14 font
-                                # (or a flags-based guess) if that's not possible.
                                 use_fontname = fr_fontname
                                 if font_choice == "Default (Helvetica)" and span_font_name:
                                     embedded_alias = _embedded_font_alias(page, span_font_name, want_bold=fr_bold)
@@ -594,15 +519,14 @@ with tab2:
                                     page.insert_textbox(f_bbox, f_text, fontsize=f_size, fontname=f_alias)
 
                                 # Pad width only enough to fit a longer replacement
-                                # word, and height only a touch — never balloon out
-                                # to the full row width, that's what caused blanks.
-                                base_rect = target_rect if did_merge else fitz.Rect(rect)
+                                # word, height only a touch.
+                                match_rect = fitz.Rect(rect)
                                 extra_w = max(0, fitz.get_text_length(new_text, fontname="helv", fontsize=fontsize)
-                                               - base_rect.width) + 6
+                                               - match_rect.width) + 6
                                 padded = fitz.Rect(
-                                    base_rect.x0, target_rect.y0 - 1,
-                                    min(base_rect.x1 + extra_w, page_rect.width - 10),
-                                    min(target_rect.y1 + fontsize * 0.3, page_rect.height - 10),
+                                    match_rect.x0, match_rect.y0 - 1,
+                                    min(match_rect.x1 + extra_w, page_rect.width - 10),
+                                    min(match_rect.y1 + fontsize * 0.3, page_rect.height - 10),
                                 )
                                 size = fontsize
                                 rc = page.insert_textbox(padded, new_text, fontsize=size, fontname=use_fontname)
@@ -612,9 +536,7 @@ with tab2:
                                     rc = page.insert_textbox(padded, new_text, fontsize=size, fontname=use_fontname)
                                     tries += 1
 
-                                # Hard safety net: if the box STILL doesn't fit for
-                                # any reason, never leave it blank — drop straight
-                                # to insert_text at the original baseline instead.
+                                # Hard safety net: never leave it blank.
                                 if rc < 0:
                                     baseline = fitz.Point(padded.x0, padded.y1 - fontsize * 0.15)
                                     page.insert_text(baseline, new_text, fontsize=max(size, 6), fontname=use_fontname)
