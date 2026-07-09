@@ -646,7 +646,7 @@ with tab2:
             # side by side on a certificate) as separate editable boxes, while still
             # keeping normal sentences/paragraphs as single boxes.
             text_dict = page.get_text("dict")
-            lines_data = []  # list of (bbox, text, fontsize, font_name, flags)
+            lines_data = []  # list of (bbox, text, fontsize, font_name, flags, is_mixed_style)
             for db in text_dict["blocks"]:
                 for line in db.get("lines", []):
                     line_text = "".join(s["text"] for s in line["spans"])
@@ -666,9 +666,29 @@ with tab2:
                             fontsize = dominant["size"]
                             font_name = dominant.get("font")
                             flags = dominant.get("flags", 0)
+
+                            # A single box can only ever be drawn in ONE font.
+                            # If this line genuinely mixes styles (e.g. plain
+                            # text with a bold heading embedded in the middle)
+                            # with more than one style contributing a real
+                            # share of the text, no amount of "pick the best
+                            # span" logic can render it correctly — the
+                            # non-dominant portion will always end up wrong.
+                            # Detect that case so we can warn instead of
+                            # silently flattening it.
+                            style_chars = {}
+                            total_chars = 0
+                            for s in spans:
+                                key = (s.get("font"), bool(s.get("flags", 0) & 16))
+                                n = len(s.get("text", ""))
+                                style_chars[key] = style_chars.get(key, 0) + n
+                                total_chars += n
+                            is_mixed_style = total_chars > 0 and sum(
+                                1 for v in style_chars.values() if v / total_chars >= 0.15
+                            ) > 1
                         else:
-                            fontsize, font_name, flags = 11, None, 0
-                        lines_data.append((line["bbox"], line_text, fontsize, font_name, flags))
+                            fontsize, font_name, flags, is_mixed_style = 11, None, 0, False
+                        lines_data.append((line["bbox"], line_text, fontsize, font_name, flags, is_mixed_style))
 
             search_query = st.text_input(
                 "🔍 Type part of the text you want to change (leave empty to see every box)",
@@ -676,7 +696,7 @@ with tab2:
             )
             if search_query.strip():
                 matching_idx = {
-                    i for i, (_, text, _, _, _) in enumerate(lines_data)
+                    i for i, (_, text, _, _, _, _) in enumerate(lines_data)
                     if search_query.strip().lower() in text.lower()
                 }
                 if not matching_idx:
@@ -695,7 +715,7 @@ with tab2:
             from PIL import Image as PILImage, ImageDraw
             preview_img = PILImage.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
             draw = ImageDraw.Draw(preview_img)
-            for i, (bbox, _, _, _, _) in enumerate(lines_data):
+            for i, (bbox, _, _, _, _, _) in enumerate(lines_data):
                 x0, y0, x1, y1 = [v * zoom for v in bbox]
                 if i in matching_idx:
                     draw.rectangle([x0, y0, x1, y1], outline="red", width=2)
@@ -716,13 +736,21 @@ with tab2:
                 else:
                     st.write(f"**{len(lines_data)}** editable text lines found on this page:")
                 edited_values = []
-                for i, (bbox, line_text, fontsize, font_name, flags) in enumerate(lines_data):
+                for i, (bbox, line_text, fontsize, font_name, flags, is_mixed_style) in enumerate(lines_data):
                     original_text = line_text.rstrip("\n")
                     if i not in matching_idx:
                         # keep the value unchanged for boxes hidden by the filter,
                         # but don't render a text_area for them so the list stays short
                         edited_values.append(original_text)
                         continue
+                    if is_mixed_style:
+                        st.warning(
+                            f"⚠️ Box #{i + 1} mixes bold and regular text in the same line. "
+                            "Editing it here will flatten the WHOLE box to one style. "
+                            "If you only need to change a small part (like a date or a "
+                            "single word) and want the bold/regular parts to stay correct, "
+                            "use **Find & Replace** instead for just that part."
+                        )
                     val = st.text_area(
                         f"Box #{i + 1}", original_text, height=68, key=f"line_{page_index}_{i}"
                     )
@@ -813,7 +841,7 @@ with tab2:
                 if st.button("Apply edits to this page and download"):
                     changed_any = False
                     edits = []  # (bbox, final_text, fontsize, fontname, is_blank_field)
-                    for (bbox, line_text, fontsize, font_name, flags), new_val in zip(lines_data, edited_values):
+                    for (bbox, line_text, fontsize, font_name, flags, is_mixed_style), new_val in zip(lines_data, edited_values):
                         original_text = line_text.rstrip("\n")
                         if new_val != original_text:
                             changed_any = True
