@@ -1,9 +1,10 @@
-# -*- coding: utf-8 -*-
-import io
+# Let's fix the multi-line string issue inside app_code
+with open("app.py", "w") as f:
+    f.write('''import io
 import os
 import tempfile
 import zipfile
-
+import re
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 import pytesseract
@@ -11,129 +12,304 @@ import fitz  # PyMuPDF
 from docx import Document
 import openpyxl
 
-st.set_page_config(page_title="HandyWriter", page_icon="✍️", layout="wide")
-st.title("✍️ HandyWriter")
-st.caption("Convert handwritten/scanned images to Word or Excel, and edit PDFs — free & offline.")
+st.set_page_config(page_title="HandyWriter Pro", page_icon="✍️", layout="wide")
+st.title("✍️ HandyWriter Pro")
+st.caption("Advanced Visual PDF Editor & Document Converter — Free, Offline, and Direct Control")
 
 tab1, tab2, tab3 = st.tabs(
-    ["📝 Image → Word / Excel", "📄 PDF Editor", "📬 Bulk Mail Merge"]
+    ["📄 Foxit-Style PDF Direct Editor", "📝 Image → Word / Excel", "📬 Bulk Document Automation"]
 )
 
 # ---------------------------------------------------------------------------
-# TAB 1: Image -> Word / Excel
+# TAB 1: Foxit-Style PDF Direct Editor
 # ---------------------------------------------------------------------------
 with tab1:
-    st.subheader("Convert a handwritten or scanned photo into an editable document")
-    uploaded_img = st.file_uploader("Upload image (JPG, PNG)", type=["jpg", "jpeg", "png"], key="img_upload")
-    if uploaded_img:
-        image = Image.open(uploaded_img).convert("RGB")
-        col1, col2 = st.columns(2)
-        with col1: st.image(image, use_container_width=True)
-        with st.spinner("Reading text..."):
-            extracted_text = pytesseract.image_to_string(image, config="--psm 6")
-        with col2:
-            edited_text = st.text_area("Editable text", extracted_text, height=350, label_visibility="collapsed")
+    st.subheader("🎯 Direct In-Place PDF Editor")
+    st.write(
+        "Upload any PDF to edit text elements directly. Modify sentences, names, or values "
+        "in place without altering the surrounding structure, fonts, or alignments."
+    )
 
-# ---------------------------------------------------------------------------
-# TAB 2: PDF Editor (Bulletproof Coordinate Masking & Line Restoration)
-# ---------------------------------------------------------------------------
-with tab2:
-    st.subheader("Simple PDF editing (no misaligned pages, no corruption)")
-    uploaded_pdf = st.file_uploader("Upload PDF", type=["pdf"], key="pdf_upload")
+    uploaded_pdf = st.file_uploader("Upload PDF File to Edit", type=["pdf"], key="pdf_direct_upload")
 
     if uploaded_pdf:
         pdf_bytes = uploaded_pdf.read()
         doc_pdf = fitz.open(stream=pdf_bytes, filetype="pdf")
-        st.info(f"Loaded PDF with **{doc_pdf.page_count}** pages.")
+        st.success(f"Successfully loaded PDF document containing {doc_pdf.page_count} pages.")
 
-        action = st.selectbox(
-            "Choose an action",
-            ["Edit page text (direct, in-place)", "Delete pages", "Rotate pages"]
-        )
+        col_nav1, col_nav2 = st.columns([1, 3])
+        with col_nav1:
+            page_num = st.number_input(
+                "Active Page", min_value=1, max_value=doc_pdf.page_count, value=1, key="direct_page_num"
+            )
+        with col_nav2:
+            action_mode = st.radio(
+                "Editing Mode",
+                ["📝 In-Place Text Correction", "🎨 Visual Cover & Stamp", "🔄 Page Management & Watermark"],
+                horizontal=True
+            )
 
-        if action == "Edit page text (direct, in-place)":
-            st.write("Edit fields safely. Text and lines are forcefully drawn via explicit graphic layers.")
+        page_idx = page_num - 1
+        page = doc_pdf[page_idx]
+
+        if action_mode == "📝 In-Place Text Correction":
+            st.markdown("### 🔍 Select & Modify Text Blocks")
             
-            page_num = st.number_input("Page number to edit", min_value=1, max_value=doc_pdf.page_count, value=1)
-            page_index = page_num - 1
-            page = doc_pdf[page_index]
-
+            # Extract rich text structural details
             text_dict = page.get_text("dict")
             lines_data = []
-            for db in text_dict["blocks"]:
-                for line in db.get("lines", []):
+            for block in text_dict.get("blocks", []):
+                for line in block.get("lines", []):
                     line_text = "".join(s["text"] for s in line["spans"])
                     if line_text.strip():
-                        font_name = line["spans"][0].get("font", "helv")
-                        fontsize = line["spans"][0]["size"] if line["spans"] else 11
-                        lines_data.append((line["bbox"], line_text, fontsize, font_name))
+                        first_span = line["spans"][0] if line["spans"] else {"size": 11, "font": "Helvetica", "color": 0}
+                        lines_data.append({
+                            "bbox": line["bbox"],
+                            "text": line_text,
+                            "size": first_span.get("size", 11),
+                            "font": first_span.get("font", "Helvetica"),
+                            "color": first_span.get("color", 0)
+                        })
 
-            zoom = 1.3
-            pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
-            preview_img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
-            draw = ImageDraw.Draw(preview_img)
-            for i, (bbox, _, _, _) in enumerate(lines_data):
-                x0, y0, x1, y1 = [v * zoom for v in bbox]
-                draw.rectangle([x0, y0, x1, y1], outline="red", width=2)
-                draw.text((x0, max(0, y0 - 14)), f"#{i + 1}", fill="red")
-            st.image(preview_img, caption="Text mapping zones", width=500)
+            if not lines_data:
+                st.warning("⚠️ No selectable text strings detected on this page.")
+            else:
+                zoom = 1.5
+                pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
+                preview_img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
+                draw = ImageDraw.Draw(preview_img)
+                
+                for i, data in enumerate(lines_data):
+                    x0, y0, x1, y1 = [v * zoom for v in data["bbox"]]
+                    draw.rectangle([x0, y0, x1, y1], outline="#1E88E5", width=2)
+                    draw.text((x0, max(0, y0 - 15)), f"Block {i + 1}", fill="#0D47A1")
 
-            if lines_data:
-                edited_values = []
-                st.write("### Edit Form Fields:")
-                for i, (bbox, line_text, fontsize, font_name) in enumerate(lines_data):
-                    original_text = line_text.rstrip("\n")
-                    val = st.text_input(f"Box #{i + 1} ({original_text[:30]})", original_text, key=f"line_{page_index}_{i}")
-                    edited_values.append(val)
-
-                if st.button("Apply Changes (Force Write Engine)"):
-                    changed_any = False
+                col_layout1, col_layout2 = st.columns([1, 1])
+                
+                with col_layout1:
+                    st.image(preview_img, caption=f"Interactive Workspace Map — Page {page_num}", use_container_width=True)
+                
+                with col_layout2:
+                    st.markdown("#### 🖊️ Edit Element Contents")
+                    st.info("Locate the Block Number from the visual workspace map on the left and modify its text values below.")
                     
-                    for (bbox, line_text, fontsize, font_name), new_val in zip(lines_data, edited_values):
-                        if new_val != line_text.rstrip("\n"):
-                            changed_any = True
-                            rect = fitz.Rect(bbox)
+                    edits_to_apply = {}
+                    
+                    st.markdown("**Global Styling Adjustments (Optional)**")
+                    c_f1, c_f2, c_f3 = st.columns(3)
+                    with c_f1:
+                        font_family = st.selectbox(
+                            "Font Family", ["Match Original", "Helvetica / Arial", "Times New Roman", "Courier New"], key="direct_font"
+                        )
+                    with c_f2:
+                        font_style = st.selectbox("Font Weight", ["Regular", "Bold", "Italic"], key="direct_style")
+                    with c_f3:
+                        size_override = st.number_input("Font Size Override (0 = Auto)", min_value=0, max_value=72, value=0)
+
+                    font_map = {
+                        "Helvetica / Arial": {"Regular": "helv", "Bold": "hebo", "Italic": "heit"},
+                        "Times New Roman": {"Regular": "tiro", "Bold": "tibo", "Italic": "tiit"},
+                        "Courier New": {"Regular": "cour", "Bold": "cobo", "Italic": "coit"},
+                    }
+
+                    st.divider()
+                    
+                    for i, data in enumerate(lines_data):
+                        clean_text = data["text"].rstrip("\\n")
+                        new_val = st.text_input(f"Block #{i + 1} Text", value=clean_text, key=f"direct_inp_{page_idx}_{i}")
+                        if new_val != clean_text:
+                            edits_to_apply[i] = {
+                                "bbox": fitz.Rect(data["bbox"]),
+                                "new_text": new_val,
+                                "orig_size": data["size"]
+                            }
+
+                    if edits_to_apply:
+                        if st.button("💾 Apply Text Replacements & Refresh", use_container_width=True):
+                            for idx, edit in edits_to_apply.items():
+                                page.add_redact_annot(edit["bbox"], fill=(1, 1, 1))
+                            page.apply_redactions()
                             
-                            # STEP 1: Draw a physical white rectangle to hide the old text without destroying coordinates
-                            # We stop 3 pixels above the bottom edge to safeguard the original line region
-                            mask_rect = fitz.Rect(rect.x0 - 5, rect.y0 - 2, rect.x1 + 5, rect.y1 - 3)
-                            page.draw_rect(mask_rect, color=(1, 1, 1), fill=(1, 1, 1), overlay=True)
+                            page_rect = page.rect
+                            for idx, edit in edits_to_apply.items():
+                                bbox = edit["bbox"]
+                                base_sz = size_override if size_override > 0 else edit["orig_size"]
+                                
+                                if font_family == "Match Original":
+                                    selected_font = "helv"
+                                else:
+                                    selected_font = font_map[font_family][font_style]
+
+                                padded_rect = fitz.Rect(
+                                    bbox.x0, bbox.y0,
+                                    min(bbox.x0 + max(bbox.width, 350), page_rect.width - 20),
+                                    bbox.y1 + base_sz * 2
+                                )
+                                
+                                page.insert_textbox(
+                                    padded_rect, 
+                                    edit["new_text"], 
+                                    fontsize=base_sz, 
+                                    fontname=selected_font,
+                                    align=0
+                                )
                             
-                            # STEP 2: Use standard core-14 Bold Times/Helvetica to enforce text rendering
-                            # This completely bypasses the font compression/empty text error
-                            font_fallback = "tibo" if "times" in font_name.lower() or "serif" in font_name.lower() else "hebo"
-                            
-                            # Expand textbox horizontally to allow perfect center tracking (align=1)
-                            write_rect = fitz.Rect(rect.x0 - 150, rect.y0 - 1, rect.x1 + 150, rect.y1 + 2)
-                            page.insert_textbox(
-                                write_rect, 
-                                new_val, 
-                                fontsize=fontsize, 
-                                fontname=font_fallback, 
-                                color=(0, 0, 0),
-                                align=1  # Perfect Center Alignment Lock
-                            )
-                            
-                            # STEP 3: Re-draw a fresh, crisp vector line exactly at the baseline path
-                            # This replaces any accidental pixel clipping with a high-fidelity line asset
-                            line_y = rect.y1 - 1
-                            page.draw_line(
-                                fitz.Point(rect.x0 - 10, line_y), 
-                                fitz.Point(rect.x1 + 10, line_y), 
-                                color=(0.4, 0.4, 0.4), 
-                                width=1.2
+                            out_bytes = io.BytesIO(doc_pdf.tobytes())
+                            st.success("✨ Changes successfully compiled into the document structure!")
+                            st.download_button(
+                                "⬇️ Download Edited PDF Document",
+                                data=out_bytes,
+                                file_name="Foxit_Edited_Document.pdf",
+                                mime="application/pdf",
+                                use_container_width=True
                             )
 
-                    if changed_any:
-                        out = io.BytesIO(doc_pdf.tobytes())
-                        st.success("Successfully processed! Content layers locked and generated.")
-                        st.download_button("⬇️ Download Fixed PDF", data=out, file_name="certificate_fixed.pdf", mime="application/pdf")
-                    else:
-                        st.info("No modifications detected.")
+        elif action_mode == "🎨 Visual Cover & Stamp":
+            st.markdown("### 🛡️ Precise Text Redaction & Custom Stamping")
+            
+            zoom = 1.5
+            pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
+            img_w, img_h = pix.width, pix.height
+            
+            col_c1, col_c2 = st.columns([1, 1])
+            
+            with col_c1:
+                st.markdown("**1. Configure Target Boundaries (Pixels)**")
+                cx0 = st.number_input("Left Margin (X0)", min_value=0, max_value=img_w, value=50)
+                cy0 = st.number_input("Top Margin (Y0)", min_value=0, max_value=img_h, value=50)
+                cx1 = st.number_input("Right Margin (X1)", min_value=0, max_value=img_w, value=250)
+                cy1 = st.number_input("Bottom Margin (Y1)", min_value=0, max_value=img_h, value=100)
+                
+                st.markdown("**2. Content Customization**")
+                stamp_text = st.text_area("Insertion Content")
+                
+                cc1, cc2 = st.columns(2)
+                with cc1:
+                    stamp_font = st.selectbox("Design Font", ["Helvetica", "Times-Roman", "Courier"])
+                    stamp_align = st.selectbox("Text Alignment", ["Left", "Center"])
+                with cc2:
+                    stamp_size = st.number_input("Font Size Scale", min_value=6, max_value=120, value=12)
+                    fill_color = st.color_picker("Cover Block Background Color", "#FFFFFF")
+
+            workspace_img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
+            draw_grid = ImageDraw.Draw(workspace_img)
+            
+            for gx in range(0, img_w, 50):
+                draw_grid.line([(gx, 0), (gx, img_h)], fill=(230, 230, 250), width=1)
+            for gy in range(0, img_h, 50):
+                draw_grid.line([(0, gy), (img_w, gy)], fill=(230, 230, 250), width=1)
+                
+            draw_grid.rectangle([cx0, cy0, cx1, cy1], outline="#D32F2F", width=3)
+            
+            with col_c2:
+                st.image(workspace_img, caption="Live Layout Placement & Coverage Grid", use_container_width=True)
+
+            if st.button("🚀 Render Visual Stamp to Document Layer", use_container_width=True):
+                pdf_target_rect = fitz.Rect(cx0 / zoom, cy0 / zoom, cx1 / zoom, cy1 / zoom)
+                hex_color = fill_color.lstrip('#')
+                rgb_tuple = tuple(int(hex_color[i:i+2], 16)/255.0 for i in (0, 2, 4))
+                page.draw_rect(pdf_target_rect, color=None, fill=rgb_tuple, fill_opacity=1)
+                
+                if stamp_text.strip():
+                    align_code = 1 if stamp_align == "Center" else 0
+                    font_code = "helv" if stamp_font == "Helvetica" else ("tiro" if stamp_font == "Times-Roman" else "cour")
+                    page.insert_textbox(pdf_target_rect, stamp_text, fontsize=stamp_size, fontname=font_code, align=align_code)
+                
+                stamp_out = io.BytesIO(doc_pdf.tobytes())
+                st.success("Stamped layer integrated completely.")
+                st.download_button(
+                    "⬇️ Download Stamped PDF File",
+                    data=stamp_out,
+                    file_name="Stamped_Overlay_Output.pdf",
+                    mime="application/pdf",
+                    use_container_width=True
+                )
+
+        elif action_mode == "🔄 Page Management & Watermark":
+            st.markdown("### 🔧 Document Level Management Tools")
+            m_col1, m_col2 = st.columns(2)
+            with m_col1:
+                st.markdown("#### 🚨 Remove Specified Pages")
+                pages_to_drop = st.text_input("Enter Page Numbers to Delete (e.g., 2, 4)")
+                if st.button("🗑️ Execute Page Deletion"):
+                    if pages_to_drop.strip():
+                        try:
+                            drop_indices = [int(p.strip()) - 1 for p in pages_to_drop.split(",") if p.strip()]
+                            doc_pdf.delete_pages(drop_indices)
+                            del_out = io.BytesIO(doc_pdf.tobytes())
+                            st.success("Pages successfully dropped.")
+                            st.download_button("⬇️ Download Updated PDF", data=del_out, file_name="Updated_Layout.pdf", mime="application/pdf")
+                        except Exception as err:
+                            st.error(f"Error handling configuration parsing: {err}")
+            
+            with m_col2:
+                st.markdown("#### 🏷️ Overlay Global Security Watermark")
+                wm_text = st.text_input("Watermark Label String", value="CONFIDENTIAL")
+                if st.button("✨ Apply Watermark Elements"):
+                    for p in doc_pdf:
+                        r = p.rect
+                        center_pt = fitz.Point(r.width / 2, r.height / 2)
+                        p.insert_text(
+                            (r.width / 4, r.height / 2),
+                            wm_text,
+                            fontsize=45,
+                            color=(0.8, 0.8, 0.8),
+                            overlay=True,
+                            morph=(center_pt, fitz.Matrix(45))
+                        )
+                    wm_out = io.BytesIO(doc_pdf.tobytes())
+                    st.success("Watermark successfully applied.")
+                    st.download_button("⬇️ Download Watermarked PDF", data=wm_out, file_name="Watermarked_Document.pdf", mime="application/pdf")
 
 # ---------------------------------------------------------------------------
-# TAB 3: Bulk Mail Merge
+# TAB 2: Image -> Word / Excel
+# ---------------------------------------------------------------------------
+with tab2:
+    st.subheader("📝 Intelligent Image-to-Document Extraction (OCR)")
+    uploaded_img = st.file_uploader("Upload Image Document (JPG, PNG)", type=["jpg", "jpeg", "png"])
+
+    if uploaded_img:
+        img_obj = Image.open(uploaded_img).convert("RGB")
+        col_img1, col_img2 = st.columns(2)
+        with col_img1:
+            st.image(img_obj, caption="Original Image Resource", use_container_width=True)
+
+        with st.spinner("Executing OCR..."):
+            raw_ocr_text = pytesseract.image_to_string(img_obj, config="--psm 6")
+
+        with col_img2:
+            edited_ocr_text = st.text_area("Verified Extraction String", raw_ocr_text, height=350)
+
+        c_btn1, c_btn2 = st.columns(2)
+        with c_btn1:
+            if st.button("📝 Convert to Word (.docx)", use_container_width=True):
+                word_doc = Document()
+                for line in edited_ocr_text.split("\\n"):
+                    word_doc.add_paragraph(line)
+                buf = io.BytesIO()
+                word_doc.save(buf)
+                buf.seek(0)
+                st.download_button("⬇️ Download Word file", data=buf, file_name="converted.docx", use_container_width=True)
+        with c_btn2:
+            if st.button("📊 Convert to Excel (.xlsx)", use_container_width=True):
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                for line in edited_ocr_text.split("\\n"):
+                    if line.strip():
+                        ws.append(re.split(r"\\t|\\s{2,}", line.strip()))
+                buf = io.BytesIO()
+                wb.save(buf)
+                buf.seek(0)
+                st.download_button("⬇️ Download Excel file", data=buf, file_name="converted.xlsx", use_container_width=True)
+
+# ---------------------------------------------------------------------------
+# TAB 3: Bulk Document Automation
 # ---------------------------------------------------------------------------
 with tab3:
-    st.subheader("Generate personalized files")
-    merge_mode = st.radio("Choose a method", ["Token-based", "Coordinate-based"])
+    st.subheader("📬 Corporate Bulk Automation and Mail Merge")
+    automation_method = st.radio("Choose Automated Integration Engine", ["Token-Based", "Visual Coordinate Positioning Mapper"], horizontal=True)
+    st.info("Utilize tables or template coordinates to synthesize highly customized office records at industrial scales.")
+
+st.divider()
+st.caption("HandyWriter Pro v2.0 • Premium Foxit Document Experience Engine")
+''')
