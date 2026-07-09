@@ -525,15 +525,21 @@ with tab2:
                                 # when the new text genuinely needs more room.
                                 est_w = _measure_width(replace_val, use_fontname, fontsize)
                                 extra_w = max(0, est_w - rect.width)
-                                # Vertical padding scales with fontsize (not a
-                                # fixed 1px) — too tight a box also forces
-                                # PyMuPDF to auto-shrink text below its real size.
-                                vpad = fontsize * 0.3
+                                # Vertical padding is asymmetric on purpose:
+                                # generous ABOVE the text (room for ascenders),
+                                # almost none BELOW it — a blank "fill in the
+                                # blank" line is very often a drawn rule
+                                # graphic just under the baseline, not
+                                # underscore text, so the safest way to avoid
+                                # ever painting over it is to keep the box's
+                                # bottom edge close to the text itself.
+                                vpad_top = fontsize * 0.3
+                                vpad_bottom = fontsize * 0.05
                                 box_x1 = min(rect.x1 + extra_w, page_rect.width - 5)
                                 box = fitz.Rect(
-                                    rect.x0, rect.y0 - vpad,
+                                    rect.x0, rect.y0 - vpad_top,
                                     box_x1,
-                                    rect.y1 + vpad,
+                                    rect.y1 + vpad_bottom,
                                 )
 
                                 # If this widened box now reaches into an
@@ -843,10 +849,21 @@ with tab2:
                                 est_w = fitz.get_text_length(final_val, fontname=use_fontname, fontsize=fontsize)
                             except Exception:
                                 est_w = fitz.get_text_length(final_val, fontname="helv", fontsize=fontsize)
+                            # Padding is asymmetric on purpose: generous ABOVE
+                            # the text (room for ascenders/accents), but almost
+                            # none BELOW it. A blank "fill in the name" line on
+                            # a certificate is very often a drawn rule/line
+                            # graphic sitting just under the baseline, not
+                            # underscore characters — no amount of text-based
+                            # filler detection can protect a line like that,
+                            # since it isn't text at all. The only real
+                            # protection is to make sure our white redaction
+                            # fill never reaches down far enough to paint over
+                            # it in the first place.
                             box = fitz.Rect(
                                 bbox.x0, bbox.y0 - fontsize * 0.3,
                                 min(bbox.x0 + est_w + 4, page_rect.width - 10),
-                                bbox.y1 + fontsize * 0.3,
+                                bbox.y1 + fontsize * 0.05,
                             )
                             page.add_redact_annot(
                                 box,
