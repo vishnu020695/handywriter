@@ -1,15 +1,4 @@
-"""
-HandyWriter — Handwritten Image → Word/Excel + Simple PDF Editor
-------------------------------------------------------------------
-100% free, open-source Python tools only (Tesseract OCR, python-docx,
-openpyxl, PyMuPDF). Runs as a local web app in your browser — works
-on Windows, Mac, Linux, and Android/iPhone (via browser, same WiFi).
-
-HOW TO RUN (see README.md for full details):
-    pip install -r requirements.txt
-    streamlit run app.py
-"""
-
+code_template = """# -*- coding: utf-8 -*-
 import io
 import os
 import tempfile
@@ -55,7 +44,6 @@ with tab1:
             st.image(image, caption="Your uploaded image", use_container_width=True)
 
         with st.spinner("Reading text from image..."):
-            # psm 6 = assume a uniform block of text (good default for notes/pages)
             extracted_text = pytesseract.image_to_string(image, config="--psm 6")
 
         with col2:
@@ -71,7 +59,7 @@ with tab1:
             if st.button("💾 Create Word (.docx)", use_container_width=True):
                 doc = Document()
                 doc.add_heading("Converted from image", level=1)
-                for line in edited_text.split("\n"):
+                for line in edited_text.split("\\n"):
                     doc.add_paragraph(line)
                 buf = io.BytesIO()
                 doc.save(buf)
@@ -86,16 +74,14 @@ with tab1:
 
         with c2:
             if st.button("💾 Create Excel (.xlsx)", use_container_width=True):
-                # Each non-empty line becomes a row; splits on 2+ spaces or tabs into columns
                 wb = openpyxl.Workbook()
                 ws = wb.active
                 ws.title = "Converted"
-                for line in edited_text.split("\n"):
+                for line in edited_text.split("\\n"):
                     if not line.strip():
                         continue
-                    # naive column split: tabs, or 2+ spaces, treated as column breaks
                     import re
-                    cells = re.split(r"\t|\s{2,}", line.strip())
+                    cells = re.split(r"\\t|\\s{2,}", line.strip())
                     ws.append(cells)
                 buf = io.BytesIO()
                 wb.save(buf)
@@ -187,8 +173,6 @@ with tab2:
             with cb4:
                 cov_y1 = st.number_input("Bottom (Y1)", min_value=0, max_value=stamp_img_h, value=125, key="cov_y1")
 
-            # preview with red box overlay AND a coordinate grid so users can read
-            # off the underline's exact row instead of guessing
             _prev_img = Image.open(io.BytesIO(stamp_pix.tobytes("png"))).convert("RGB")
             from PIL import ImageDraw as _ImgDraw2
             _draw2 = _ImgDraw2.Draw(_prev_img)
@@ -228,7 +212,6 @@ with tab2:
                 if not stamp_text.strip():
                     st.warning("Enter the text to type into the box.")
                 else:
-                    # convert pixel coords (at preview zoom) back to PDF point coords
                     pdf_rect = fitz.Rect(cov_x0 / zoom, cov_y0 / zoom, cov_x1 / zoom, cov_y1 / zoom)
                     stamp_page.draw_rect(pdf_rect, color=None, fill=(1, 1, 1), fill_opacity=1)
                     rc = stamp_page.insert_textbox(
@@ -315,7 +298,7 @@ with tab2:
                                 pages_with_match.append((pnum + 1, len(rects)))
                         if pages_with_match:
                             any_found = True
-                            st.write(f"**\"{find_val}\"** found on: " + ", ".join(f"page {p} ({n}x)" for p, n in pages_with_match))
+                            st.write(f"**\\"{find_val}\\"** found on: " + ", ".join(f"page {p} ({n}x)" for p, n in pages_with_match))
                             first_page_num, _ = pages_with_match[0]
                             _prev_page = doc_pdf[first_page_num - 1]
                             _prev_rects = _prev_page.search_for(find_val)
@@ -328,9 +311,118 @@ with tab2:
                                 _draw.rectangle([r.x0*zoom, r.y0*zoom, r.x1*zoom, r.y1*zoom], outline="red", width=3)
                             st.image(_img, caption=f"Highlighted on page {first_page_num}", width=500)
                         else:
-                            st.warning(f"**\"{find_val}\"** was not found anywhere in the document. Check spelling/spacing.")
+                            st.warning(f"**\\"{find_val}\\"** was not found anywhere in the document. Check spelling/spacing.")
                     if not any_found:
                         st.info("No matches found for any entry — nothing will change if you apply now.")
+
+            def _flags_to_base14(flags, serif_hint):
+                italic = bool(flags & 2)
+                bold = bool(flags & 16)
+                mono = bool(flags & 8)
+                serif = serif_hint or bool(flags & 4)
+                if mono:
+                    if bold and italic: return "cobi"
+                    if bold: return "cobo"
+                    if italic: return "coit"
+                    return "cour"
+                if serif:
+                    if bold and italic: return "tibi"
+                    if bold: return "tibo"
+                    if italic: return "tiit"
+                    return "tiro"
+                if bold and italic: return "hebi"
+                if bold: return "hebo"
+                if italic: return "heit"
+                return "helv"
+
+            def _find_line_for_rect(page, rect):
+                text_dict = page.get_text("dict")
+                cy = (rect.y0 + rect.y1) / 2
+                best = None
+                for block in text_dict.get("blocks", []):
+                    for line in block.get("lines", []):
+                        bbox = line["bbox"]
+                        if bbox[1] - 1 <= cy <= bbox[3] + 1:
+                            best = line
+                            break
+                    if best:
+                        break
+                return best
+
+            font_buffer_cache = {}
+
+            def _embedded_font_alias(page, span_font_name, want_bold=False):
+                try:
+                    candidates = list(page.get_fonts(full=True))
+                    family_root = (span_font_name or "").split("-")[0].split(",")[0].lower()
+
+                    if want_bold:
+                        for xref, ext, subtype, basefont, refname, encoding in candidates:
+                            bf_lower = basefont.lower()
+                            if family_root and family_root in bf_lower and "bold" in bf_lower:
+                                fontname, fontext, fonttype, fontbuffer = doc_pdf.extract_font(xref)
+                                if fontbuffer:
+                                    alias = f"embedded_{xref}"
+                                    page.insert_font(fontname=alias, fontbuffer=fontbuffer)
+                                    font_buffer_cache[alias] = fontbuffer
+                                    return alias
+                        if span_font_name and "bold" in span_font_name.lower():
+                            for xref, ext, subtype, basefont, refname, encoding in candidates:
+                                if basefont == span_font_name:
+                                    fontname, fontext, fonttype, fontbuffer = doc_pdf.extract_font(xref)
+                                    if fontbuffer:
+                                        alias = f"embedded_{xref}"
+                                        page.insert_font(fontname=alias, fontbuffer=fontbuffer)
+                                        font_buffer_cache[alias] = fontbuffer
+                                        return alias
+                        return None
+
+                    for xref, ext, subtype, basefont, refname, encoding in candidates:
+                        if basefont == span_font_name or (span_font_name and span_font_name in basefont):
+                            fontname, fontext, fonttype, fontbuffer = doc_pdf.extract_font(xref)
+                            if fontbuffer:
+                                alias = f"embedded_{xref}"
+                                page.insert_font(fontname=alias, fontbuffer=fontbuffer)
+                                font_buffer_cache[alias] = fontbuffer
+                                return alias
+                except Exception:
+                    pass
+                return None
+
+            def _measure_width(text, fontname, fontsize):
+                try:
+                    if fontname in font_buffer_cache:
+                        return fitz.Font(fontbuffer=font_buffer_cache[fontname]).text_length(text, fontsize=fontsize)
+                    return fitz.Font(fontname=fontname).text_length(text, fontsize=fontsize)
+                except Exception:
+                    return fitz.get_text_length(text, fontname="helv", fontsize=fontsize)
+
+            def _is_filler_span(text):
+                stripped = text.replace(" ", "")
+                if not stripped:
+                    return True
+                filler_chars = set("_.-")
+                return len(stripped) >= 3 and all(ch in filler_chars for ch in stripped)
+
+            def _adjacent_fillers(line, rect):
+                if not line or not line.get("spans"):
+                    return []
+                spans = line["spans"]
+                match_idx = None
+                for i, s in enumerate(spans):
+                    if fitz.Rect(s["bbox"]).intersects(rect):
+                        match_idx = i
+                        break
+                if match_idx is None:
+                    return []
+                out = []
+                if match_idx - 1 >= 0 and _is_filler_span(spans[match_idx - 1]["text"]):
+                    s = spans[match_idx - 1]
+                    out.append((s["text"], fitz.Rect(s["bbox"]), s.get("font"), s["size"]))
+                if match_idx + 1 < len(spans) and _is_filler_span(spans[match_idx + 1]["text"]):
+                    s = spans[match_idx + 1]
+                    out.append((s["text"], fitz.Rect(s["bbox"]), s.get("font"), s["size"]))
+                return out
 
             if st.button("Apply Find & Replace to entire PDF"):
                 if not fr_pairs:
@@ -339,33 +431,77 @@ with tab2:
                     total_replacements = 0
                     for page in doc_pdf:
                         page_rect = page.rect
+                        annots_queued = 0
                         for find_val, replace_val in fr_pairs:
                             rects = page.search_for(find_val)
                             for rect in rects:
+                                line = _find_line_for_rect(page, rect)
                                 fontsize = 11
-                                metrics = page.get_text("dict", clip=rect)
-                                try:
-                                    fontsize = metrics["blocks"][0]["lines"][0]["spans"][0]["size"]
-                                except Exception:
-                                    pass
+                                span_font_name = None
+                                span_flags = 0
+                                if line and line.get("spans"):
+                                    for s in line["spans"]:
+                                        if fitz.Rect(s["bbox"]).intersects(rect):
+                                            fontsize = s["size"]
+                                            span_font_name = s.get("font")
+                                            span_flags = s.get("flags", 0)
+                                            break
+
+                                height_based_size = rect.height / 1.15
+                                if fontsize < height_based_size * 0.7:
+                                    fontsize = height_based_size
+
                                 if fr_size_override > 0:
                                     fontsize = fr_size_override
-                                page.add_redact_annot(rect, fill=(1, 1, 1))
-                                page.apply_redactions()
-                                padded = fitz.Rect(
-                                    rect.x0, rect.y0,
-                                    min(rect.x0 + max(rect.width, 300), page_rect.width - 20),
-                                    rect.y1,
+
+                                use_fontname = fr_fontname
+                                if font_choice == "Default (Helvetica)" and span_font_name:
+                                    embedded_alias = _embedded_font_alias(page, span_font_name, want_bold=fr_bold)
+                                    if embedded_alias:
+                                        use_fontname = embedded_alias
+                                    else:
+                                        effective_flags = span_flags | 16 if fr_bold else span_flags
+                                        use_fontname = _flags_to_base14(effective_flags, serif_hint=True)
+
+                                est_w = _measure_width(replace_val, use_fontname, fontsize)
+                                extra_w = max(0, est_w - rect.width)
+                                vpad = fontsize * 0.3
+                                box_x1 = min(rect.x1 + extra_w, page_rect.width - 5)
+                                box = fitz.Rect(
+                                    rect.x0, rect.y0 - vpad,
+                                    box_x1,
+                                    rect.y1 + vpad,
                                 )
-                                padded.y1 = min(padded.y1 + fontsize * 3, page_rect.height - 20)
-                                size = fontsize
-                                rc = page.insert_textbox(padded, replace_val, fontsize=size, fontname=fr_fontname)
-                                tries = 0
-                                while rc < 0 and size > 6 and tries < 8:
-                                    size -= 1
-                                    rc = page.insert_textbox(padded, replace_val, fontsize=size, fontname=fr_fontname)
-                                    tries += 1
+
+                                for f_text, f_bbox, f_font, f_size in _adjacent_fillers(line, rect):
+                                    if box.intersects(f_bbox):
+                                        f_alias = _embedded_font_alias(page, f_font, want_bold=False) or "tiro"
+                                        page.add_redact_annot(
+                                            f_bbox,
+                                            text=f_text,
+                                            fontname=f_alias,
+                                            fontsize=f_size,
+                                            align=fitz.TEXT_ALIGN_LEFT,
+                                            fill=(1, 1, 1),
+                                            text_color=(0, 0, 0),
+                                        )
+                                        annots_queued += 1
+
+                                page.add_redact_annot(
+                                    box,
+                                    text=replace_val,
+                                    fontname=use_fontname,
+                                    fontsize=fontsize,
+                                    align=fitz.TEXT_ALIGN_LEFT,
+                                    fill=(1, 1, 1),
+                                    text_color=(0, 0, 0),
+                                )
+                                annots_queued += 1
                                 total_replacements += 1
+
+                        if annots_queued:
+                            page.apply_redactions()
+
                     if total_replacements == 0:
                         st.warning("None of the 'Find' text was found in this PDF. Check spelling/spacing matches exactly.")
                     else:
@@ -386,19 +522,51 @@ with tab2:
                 "Edit any box, then apply — text is placed in the same spot and size, "
                 "so nothing shifts or misaligns."
             )
+
+            st.markdown("##### 🔍 Find it first — search every page")
+            st.caption(
+                "On a multi-page document it's much faster to search across all pages "
+                "than to open each one and hunt through its boxes."
+            )
+            global_query = st.text_input(
+                "Search across ALL pages for text you want to edit", key="el_global_query"
+            )
+            if global_query.strip():
+                q = global_query.strip().lower()
+                results = []
+                for pi in range(doc_pdf.page_count):
+                    pg_td = doc_pdf[pi].get_text("dict")
+                    for db in pg_td["blocks"]:
+                        for ln in db.get("lines", []):
+                            txt = "".join(s["text"] for s in ln["spans"]).strip()
+                            if txt and q in txt.lower():
+                                results.append((pi, txt))
+                if not results:
+                    st.warning("That text wasn't found on any page.")
+                else:
+                    pages_hit = sorted(set(r[0] + 1 for r in results))
+                    st.write(f"Found on page(s): **{', '.join(str(p) for p in pages_hit)}** "
+                             f"({len(results)} matching line(s) total). Click one to jump straight there:")
+                    for result_idx, (pi, snippet) in enumerate(results[:40]):
+                        label = f"Page {pi + 1}: {snippet[:80]}"
+                        if st.button(label, key=f"jump_{result_idx}_{pi}"):
+                            st.session_state["el_page_num"] = pi + 1
+                            st.session_state[f"line_search_{pi}"] = global_query
+                            st.rerun()
+                    if len(results) > 40:
+                        st.caption(f"...and {len(results) - 40} more matches not shown here.")
+            st.markdown("---")
+
+            if "el_page_num" not in st.session_state:
+                st.session_state["el_page_num"] = 1
             page_num = st.number_input(
-                "Page number to edit", min_value=1, max_value=doc_pdf.page_count, value=1
+                "Page number to edit", min_value=1, max_value=doc_pdf.page_count, key="el_page_num"
             )
             page_index = page_num - 1
             page = doc_pdf[page_index]
 
-            # Extract editable text at the LINE level (not paragraph blocks, not
-            # individual words). This is the level that correctly keeps separate
-            # fields on the same visual line (e.g. a name and a department sitting
-            # side by side on a certificate) as separate editable boxes, while still
-            # keeping normal sentences/paragraphs as single boxes.
             text_dict = page.get_text("dict")
-            lines_data = []  # list of (bbox, text, fontsize)
+            lines_data = []
             for db in text_dict["blocks"]:
                 for line in db.get("lines", []):
                     line_text = "".join(s["text"] for s in line["spans"])
@@ -406,7 +574,21 @@ with tab2:
                         fontsize = line["spans"][0]["size"] if line["spans"] else 11
                         lines_data.append((line["bbox"], line_text, fontsize))
 
-            # Draw numbered boxes on the preview so boxes map visually to the page
+            search_query = st.text_input(
+                "🔍 Type part of the text you want to change (leave empty to see every box)",
+                key=f"line_search_{page_index}",
+            )
+            if search_query.strip():
+                matching_idx = {
+                    i for i, (_, text, _) in enumerate(lines_data)
+                    if search_query.strip().lower() in text.lower()
+                }
+                if not matching_idx:
+                    st.warning("No text on this page matches that — showing every box instead.")
+                    matching_idx = set(range(len(lines_data)))
+            else:
+                matching_idx = set(range(len(lines_data)))
+
             zoom = 1.3
             pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
             from PIL import Image as PILImage, ImageDraw
@@ -414,8 +596,11 @@ with tab2:
             draw = ImageDraw.Draw(preview_img)
             for i, (bbox, _, _) in enumerate(lines_data):
                 x0, y0, x1, y1 = [v * zoom for v in bbox]
-                draw.rectangle([x0, y0, x1, y1], outline="red", width=2)
-                draw.text((x0, max(0, y0 - 14)), f"#{i + 1}", fill="red")
+                if i in matching_idx:
+                    draw.rectangle([x0, y0, x1, y1], outline="red", width=2)
+                    draw.text((x0, max(0, y0 - 14)), f"#{i + 1}", fill="red")
+                else:
+                    draw.rectangle([x0, y0, x1, y1], outline=(200, 200, 200), width=1)
             st.image(preview_img, caption=f"Page {page_num} — boxes numbered to match the list below", width=500)
 
             if not lines_data:
@@ -424,10 +609,17 @@ with tab2:
                     "Use the 'Image → Word/Excel' tab instead, or the PDF-to-Word conversion below."
                 )
             else:
-                st.write(f"**{len(lines_data)}** editable text lines found on this page:")
+                shown_count = len(matching_idx)
+                if search_query.strip():
+                    st.write(f"**{shown_count}** of {len(lines_data)} boxes match — only these are shown below:")
+                else:
+                    st.write(f"**{len(lines_data)}** editable text lines found on this page:")
                 edited_values = []
                 for i, (bbox, line_text, fontsize) in enumerate(lines_data):
-                    original_text = line_text.rstrip("\n")
+                    original_text = line_text.rstrip("\\n")
+                    if i not in matching_idx:
+                        edited_values.append(original_text)
+                        continue
                     val = st.text_area(
                         f"Box #{i + 1}", original_text, height=68, key=f"line_{page_index}_{i}"
                     )
@@ -456,9 +648,9 @@ with tab2:
 
                 if st.button("Apply edits to this page and download"):
                     changed_any = False
-                    edits = []  # (bbox, new_text, fontsize)
+                    edits = []
                     for (bbox, line_text, fontsize), new_val in zip(lines_data, edited_values):
-                        original_text = line_text.rstrip("\n")
+                        original_text = line_text.rstrip("\\n")
                         if new_val != original_text:
                             changed_any = True
                             use_size = line_size_override if line_size_override > 0 else fontsize
@@ -472,7 +664,6 @@ with tab2:
                         page.apply_redactions()
                         page_rect = page.rect
                         for bbox, new_val, fontsize in edits:
-                            # Give the box room to grow (in case new text is longer than old)
                             padded = fitz.Rect(
                                 bbox.x0,
                                 bbox.y0,
@@ -519,7 +710,6 @@ with tab2:
                         continue
                     rect = rects[0]
 
-                    # show a small preview crop of this image area
                     zoom = 2
                     pix = page_img.get_pixmap(clip=rect, matrix=fitz.Matrix(zoom, zoom))
                     st.image(pix.tobytes("png"), caption=f"Image #{idx + 1} (page {page_num_img})", width=200)
@@ -590,7 +780,6 @@ with tab2:
                 for page in doc_pdf:
                     rect = page.rect
                     center = fitz.Point(rect.width / 2, rect.height / 2)
-                    # rotate diagonally around the page center using a morph matrix
                     morph = (center, fitz.Matrix(45))
                     page.insert_text(
                         (rect.width / 4, rect.height / 2),
@@ -681,7 +870,7 @@ with tab3:
                                 for span in line["spans"]:
                                     if fitz.Rect(span["bbox"]).intersects(bbox):
                                         fontsize = span["size"]
-                        edits.append((bbox, new_text.rstrip("\n"), fontsize))
+                        edits.append((bbox, new_text.rstrip("\\n"), fontsize))
                 for bbox, new_text, fontsize in edits:
                     page.add_redact_annot(bbox, fill=(1, 1, 1))
                 page.apply_redactions()
@@ -782,7 +971,6 @@ with tab3:
         coord_excel = st.file_uploader("Upload Excel sheet (.xlsx)", type=["xlsx"], key="coord_excel")
 
         if coord_template and coord_excel:
-            # Get a base image of the template (render page 1 if PDF)
             if coord_template.type == "application/pdf" or coord_template.name.lower().endswith(".pdf"):
                 _doc = fitz.open(stream=coord_template.read(), filetype="pdf")
                 _pix = _doc[0].get_pixmap(matrix=fitz.Matrix(2, 2))
@@ -820,7 +1008,7 @@ with tab3:
             st.info(
                 "💡 If the template already has a filled-in example (like a sample name), set "
                 "**Cover width/height** big enough to fully paint over it — otherwise the old "
-                "text will show through underneath your new text.\n\n"
+                "text will show through underneath your new text.\\n\\n"
                 "⚠️ **If the field sits on an underlined blank**, keep Cover height "
                 "**just tall enough for the text itself** — if it's too tall it will paint "
                 "over the underline too and erase it. Use the Preview button below to check "
@@ -902,7 +1090,6 @@ with tab3:
                         draw = ImageDraw.Draw(img_copy)
                         for h, pos in positions.items():
                             text_val = str(rowdict.get(h, "") if rowdict.get(h) is not None else "")
-                            # Erase any existing text in this area FIRST
                             if pos["cover_w"] > 0 and pos["cover_h"] > 0:
                                 draw.rectangle(
                                     [pos["x"], pos["y"], pos["x"] + pos["cover_w"], pos["y"] + pos["cover_h"]],
@@ -938,3 +1125,8 @@ with tab3:
 
 st.divider()
 st.caption("HandyWriter · 100% free & open-source · Your files are processed locally, never uploaded anywhere.")
+"""
+
+with open("app.py", "w", encoding="utf-8") as f:
+    f.write(code_template)
+print("File written successfully.")
