@@ -1220,6 +1220,49 @@ with tab3:
             rows = list(ws.iter_rows(min_row=2, values_only=True))
             st.info(f"Found **{len(rows)}** rows and columns: {', '.join(str(h) for h in headers)}")
 
+            font_path_regular = None
+            font_path_bold = None
+            for candidate in [
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+            ]:
+                if os.path.exists(candidate):
+                    font_path_regular = candidate
+                    break
+            for candidate in [
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+            ]:
+                if os.path.exists(candidate):
+                    font_path_bold = candidate
+                    break
+
+            def _draw_positions_preview(sample_row):
+                """Render the template with the CURRENT X/Y/size/align values
+                stamped using one real row of data, so you can see exactly
+                where text will land and fix it BEFORE running all 2000 —
+                instead of guessing coordinates blind and finding out only
+                after generating the whole batch."""
+                rowdict = dict(zip(headers, sample_row))
+                img_copy = base_image.copy()
+                draw = ImageDraw.Draw(img_copy)
+                for h, pos in positions.items():
+                    text_val = str(rowdict.get(h, "") if rowdict.get(h) is not None else "")
+                    chosen_path = font_path_bold if pos.get("bold") and font_path_bold else font_path_regular
+                    try:
+                        font = ImageFont.truetype(chosen_path, pos["size"]) if chosen_path else ImageFont.load_default()
+                    except Exception:
+                        font = ImageFont.load_default()
+                    left, top, right, bottom = draw.textbbox((0, 0), text_val, font=font)
+                    text_width = right - left
+                    final_x = pos["x"] - (text_width / 2) if pos["align"] == "Center" else pos["x"]
+                    # crosshair at the exact anchor point, so you can tell
+                    # "position" from "where the text visually starts"
+                    draw.line([(pos["x"] - 6, pos["y"]), (pos["x"] + 6, pos["y"])], fill=(255, 0, 0), width=1)
+                    draw.line([(pos["x"], pos["y"] - 6), (pos["x"], pos["y"] + 6)], fill=(255, 0, 0), width=1)
+                    draw.text((final_x, pos["y"]), text_val, fill=(0, 0, 0), font=font)
+                return img_copy
+
             st.write("#### 3. Set the X/Y position for each field (same position used for every student)")
             positions = {}
             for idx, h in enumerate(headers):
@@ -1237,6 +1280,14 @@ with tab3:
                     bold_type = st.checkbox("Bold", key=f"cb_{h}")
                 positions[h] = {"x": x_pos, "y": y_pos, "size": f_size, "align": align_type, "bold": bold_type}
 
+            if rows:
+                st.write("#### 👀 Live preview — check this BEFORE generating all rows")
+                st.caption(
+                    "Uses your first Excel row as a sample. The red crosshair marks the exact "
+                    "X/Y anchor point for each field — adjust the numbers above and this updates."
+                )
+                st.image(_draw_positions_preview(rows[0]), caption="Preview with real data", width=500)
+
             folder_col2 = st.selectbox(
                 "Sort output into folders by column? (optional)",
                 options=["(no folders — flat list)"] + [str(h) for h in headers],
@@ -1246,22 +1297,6 @@ with tab3:
                 "Use which column to name each file?", options=[str(h) for h in headers], key="coord_name_col"
             )
 
-            font_path_regular = None
-            font_path_bold = None
-            for candidate in [
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-                "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-            ]:
-                if os.path.exists(candidate):
-                    font_path_regular = candidate
-                    break
-            for candidate in [
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-                "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-            ]:
-                if os.path.exists(candidate):
-                    font_path_bold = candidate
-                    break
 
             if st.button(f"🚀 Generate all {len(rows)} personalized files", key="coord_generate"):
                 zip_buf = io.BytesIO()
