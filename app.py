@@ -126,10 +126,19 @@ with tab1:
                         if st.button("💾 Apply Text Replacements & Refresh", use_container_width=True):
                             # Underline safe execution - strict bounding box targeting
                             for idx, edit in edits_to_apply.items():
-                                # Shaved off 4.0 points from the bottom to entirely avoid hitting underlines below baseline
-                                tight_bbox = fitz.Rect(edit["bbox"].x0, edit["bbox"].y0, edit["bbox"].x1, edit["bbox"].y1 - 4.0)
-                                page.add_redact_annot(tight_bbox, fill=(1, 1, 1))
-                            page.apply_redactions()
+                                bbox = edit["bbox"]
+                                cover_rect = fitz.Rect(
+                                    bbox.x0,
+                                    bbox.y0,
+                                    bbox.x1,
+                                    bbox.y1 - 4
+                                )
+                                page.draw_rect(
+                                    cover_rect,
+                                    color=None,
+                                    fill=(1, 1, 1),
+                                    overlay=True
+                                )
                             
                             page_rect = page.rect
                             for idx, edit in edits_to_apply.items():
@@ -356,8 +365,7 @@ with tab3:
 
                         # Underline safe batch redaction
                         for coord_box, _ in sub_actions:
-                            # Shaved off 4.0 points from the bottom to entirely avoid hitting underlines below baseline
-                            tight_box = fitz.Rect(coord_box.x0, coord_box.y0, coord_box.x1, coord_box.y1 - 4.0)
+                            tight_box = fitz.Rect(coord_box.x0, coord_box.y0, coord_box.x1, coord_box.y1 - 1.5)
                             active_p.add_redact_annot(tight_box, fill=(1, 1, 1))
                         active_p.apply_redactions()
                         
