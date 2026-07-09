@@ -1,6 +1,4 @@
-# Let's fix the multi-line string issue inside app_code
-with open("app.py", "w") as f:
-    f.write('''import io
+import io
 import os
 import tempfile
 import zipfile
@@ -55,7 +53,6 @@ with tab1:
         if action_mode == "📝 In-Place Text Correction":
             st.markdown("### 🔍 Select & Modify Text Blocks")
             
-            # Extract rich text structural details
             text_dict = page.get_text("dict")
             lines_data = []
             for block in text_dict.get("blocks", []):
@@ -91,20 +88,20 @@ with tab1:
                 
                 with col_layout2:
                     st.markdown("#### 🖊️ Edit Element Contents")
-                    st.info("Locate the Block Number from the visual workspace map on the left and modify its text values below.")
+                    st.info("Locate the Block Number from the visual map and modify its text values below.")
                     
                     edits_to_apply = {}
                     
-                    st.markdown("**Global Styling Adjustments (Optional)**")
+                    st.markdown("**Global Font Control (Optional Override)**")
                     c_f1, c_f2, c_f3 = st.columns(3)
                     with c_f1:
                         font_family = st.selectbox(
-                            "Font Family", ["Match Original", "Helvetica / Arial", "Times New Roman", "Courier New"], key="direct_font"
+                            "Font Family", ["Match Original PDF Font", "Helvetica / Arial", "Times New Roman", "Courier New"], key="direct_font"
                         )
                     with c_f2:
                         font_style = st.selectbox("Font Weight", ["Regular", "Bold", "Italic"], key="direct_style")
                     with c_f3:
-                        size_override = st.number_input("Font Size Override (0 = Auto)", min_value=0, max_value=72, value=0)
+                        size_override = st.number_input("Font Size Override (0 = Auto-match)", min_value=0, max_value=72, value=0)
 
                     font_map = {
                         "Helvetica / Arial": {"Regular": "helv", "Bold": "hebo", "Italic": "heit"},
@@ -115,13 +112,14 @@ with tab1:
                     st.divider()
                     
                     for i, data in enumerate(lines_data):
-                        clean_text = data["text"].rstrip("\\n")
+                        clean_text = data["text"].rstrip("\n")
                         new_val = st.text_input(f"Block #{i + 1} Text", value=clean_text, key=f"direct_inp_{page_idx}_{i}")
                         if new_val != clean_text:
                             edits_to_apply[i] = {
                                 "bbox": fitz.Rect(data["bbox"]),
                                 "new_text": new_val,
-                                "orig_size": data["size"]
+                                "orig_size": data["size"],
+                                "orig_font": data["font"]
                             }
 
                     if edits_to_apply:
@@ -135,8 +133,17 @@ with tab1:
                                 bbox = edit["bbox"]
                                 base_sz = size_override if size_override > 0 else edit["orig_size"]
                                 
-                                if font_family == "Match Original":
-                                    selected_font = "helv"
+                                # Font Smart Matching Logic
+                                if font_family == "Match Original PDF Font":
+                                    orig_f_lower = edit["orig_font"].lower()
+                                    if "bold" in orig_f_lower:
+                                        selected_font = "hebo" if "times" not in orig_f_lower else "tibo"
+                                    elif "times" in orig_f_lower or "roman" in orig_f_lower:
+                                        selected_font = "tiro"
+                                    elif "cour" in orig_f_lower:
+                                        selected_font = "cour"
+                                    else:
+                                        selected_font = "helv"
                                 else:
                                     selected_font = font_map[font_family][font_style]
 
@@ -159,20 +166,18 @@ with tab1:
                             st.download_button(
                                 "⬇️ Download Edited PDF Document",
                                 data=out_bytes,
-                                file_name="Foxit_Edited_Document.pdf",
+                                file_name="Foxit_Style_Edited.pdf",
                                 mime="application/pdf",
                                 use_container_width=True
                             )
 
         elif action_mode == "🎨 Visual Cover & Stamp":
             st.markdown("### 🛡️ Precise Text Redaction & Custom Stamping")
-            
             zoom = 1.5
             pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
             img_w, img_h = pix.width, pix.height
             
             col_c1, col_c2 = st.columns([1, 1])
-            
             with col_c1:
                 st.markdown("**1. Configure Target Boundaries (Pixels)**")
                 cx0 = st.number_input("Left Margin (X0)", min_value=0, max_value=img_w, value=50)
@@ -198,7 +203,6 @@ with tab1:
                 draw_grid.line([(gx, 0), (gx, img_h)], fill=(230, 230, 250), width=1)
             for gy in range(0, img_h, 50):
                 draw_grid.line([(0, gy), (img_w, gy)], fill=(230, 230, 250), width=1)
-                
             draw_grid.rectangle([cx0, cy0, cx1, cy1], outline="#D32F2F", width=3)
             
             with col_c2:
@@ -220,7 +224,7 @@ with tab1:
                 st.download_button(
                     "⬇️ Download Stamped PDF File",
                     data=stamp_out,
-                    file_name="Stamped_Overlay_Output.pdf",
+                    file_name="Stamped_Output.pdf",
                     mime="application/pdf",
                     use_container_width=True
                 )
@@ -266,7 +270,7 @@ with tab1:
 # ---------------------------------------------------------------------------
 with tab2:
     st.subheader("📝 Intelligent Image-to-Document Extraction (OCR)")
-    uploaded_img = st.file_uploader("Upload Image Document (JPG, PNG)", type=["jpg", "jpeg", "png"])
+    uploaded_img = st.file_uploader("Upload Image Document (JPG, PNG)", type=["jpg", "jpeg", "png"], key="ocr_img_upload")
 
     if uploaded_img:
         img_obj = Image.open(uploaded_img).convert("RGB")
@@ -284,7 +288,7 @@ with tab2:
         with c_btn1:
             if st.button("📝 Convert to Word (.docx)", use_container_width=True):
                 word_doc = Document()
-                for line in edited_ocr_text.split("\\n"):
+                for line in edited_ocr_text.split("\n"):
                     word_doc.add_paragraph(line)
                 buf = io.BytesIO()
                 word_doc.save(buf)
@@ -294,22 +298,80 @@ with tab2:
             if st.button("📊 Convert to Excel (.xlsx)", use_container_width=True):
                 wb = openpyxl.Workbook()
                 ws = wb.active
-                for line in edited_ocr_text.split("\\n"):
+                for line in edited_ocr_text.split("\n"):
                     if line.strip():
-                        ws.append(re.split(r"\\t|\\s{2,}", line.strip()))
+                        ws.append(re.split(r"\t|\s{2,}", line.strip()))
                 buf = io.BytesIO()
                 wb.save(buf)
                 buf.seek(0)
                 st.download_button("⬇️ Download Excel file", data=buf, file_name="converted.xlsx", use_container_width=True)
 
 # ---------------------------------------------------------------------------
-# TAB 3: Bulk Document Automation
+# TAB 3:📬 Bulk Document Automation (Mail Merge) - RE-ENABLED!
 # ---------------------------------------------------------------------------
 with tab3:
-    st.subheader("📬 Corporate Bulk Automation and Mail Merge")
-    automation_method = st.radio("Choose Automated Integration Engine", ["Token-Based", "Visual Coordinate Positioning Mapper"], horizontal=True)
-    st.info("Utilize tables or template coordinates to synthesize highly customized office records at industrial scales.")
+    st.subheader("📬 Corporate Bulk Automation and Mail Merge Engine")
+    st.write("Generate thousands of personalized PDFs using tabular Excel registers (.xlsx) instantly.")
+    
+    tpl_pdf = st.file_uploader("1. Upload Template PDF File (with {{TOKENS}} placeholders)", type=["pdf"], key="bulk_tpl_pdf")
+    data_sheet = st.file_uploader("2. Upload Excel Dataset Register (.xlsx)", type=["xlsx"], key="bulk_data_sheet")
+
+    if tpl_pdf and data_sheet:
+        tpl_bytes = tpl_pdf.read()
+        wb = openpyxl.load_workbook(io.BytesIO(data_sheet.read()))
+        ws = wb.active
+        
+        # Extract headers and row values cleanly
+        data_headers = [cell.value for cell in ws[1] if cell.value is not None]
+        records = list(ws.iter_rows(min_row=2, values_only=True))
+        
+        st.success(f"📊 Discovered **{len(records)}** active rows matching data sheet criteria. Columns: {', '.join(data_headers)}")
+        naming_factor = st.selectbox("Select File Naming Column Mapping (e.g. Employee Name / ID)", options=data_headers)
+
+        if st.button("⚙️ Trigger Bulk Mail-Merge Compilation Loop", use_container_width=True):
+            zip_memory_stream = io.BytesIO()
+            progress_bar = st.progress(0)
+            
+            with zipfile.ZipFile(zip_memory_stream, "w") as archive:
+                for idx, data_row in enumerate(records):
+                    row_context = dict(zip(data_headers, data_row))
+                    fresh_doc = fitz.open(stream=tpl_bytes, filetype="pdf")
+                    
+                    for active_p in fresh_doc:
+                        block_text_list = [b for b in active_p.get_text("blocks") if b[4].strip()]
+                        
+                        sub_actions = []
+                        for individual_b in block_text_list:
+                            item_text = individual_b[4]
+                            was_altered = False
+                            for header_key, value_item in row_context.items():
+                                target_token = "{{" + str(header_key) + "}}"
+                                if target_token in item_text:
+                                    item_text = item_text.replace(target_token, str(value_item))
+                                    was_altered = True
+                            if was_altered:
+                                sub_actions.append((fitz.Rect(individual_b[:4]), item_text.rstrip("\n")))
+
+                        # Redact and Replace with inherited alignment
+                        for coord_box, _ in sub_actions:
+                            active_p.add_redact_annot(coord_box, fill=(1, 1, 1))
+                        active_p.apply_redactions()
+                        
+                        for coord_box, formatted_str in sub_actions:
+                            active_p.insert_textbox(coord_box, formatted_str, fontsize=11, fontname="helv", align=0)
+                            
+                    file_label = str(row_context.get(naming_factor, f"Record_{idx+1}")).replace(" ", "_")
+                    archive.writestr(f"Automated_Outputs/{file_label}.pdf", fresh_doc.tobytes())
+                    progress_bar.progress((idx + 1) / len(records))
+            
+            st.success("✨ Batch transformation sequence completed successfully!")
+            st.download_button(
+                "⬇️ Download All Compiled Documents (ZIP File)",
+                data=zip_memory_stream.getvalue(),
+                file_name="Automated_Bulk_Outputs.zip",
+                mime="application/zip",
+                use_container_width=True
+            )
 
 st.divider()
-st.caption("HandyWriter Pro v2.0 • Premium Foxit Document Experience Engine")
-''')
+st.caption("HandyWriter Pro v2.5 • Premium Foxit Document Experience Engine")
