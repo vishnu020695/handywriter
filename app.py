@@ -778,10 +778,19 @@ with tab2:
                             # for Base-14 fonts) instead of assuming a fixed
                             # 300pt-wide box — that old approach either clipped
                             # long text or left a big empty gap for short text.
+                            # Note: final_val already has any preserved filler
+                            # (underscores) folded in by _split_filler_ends, so
+                            # sizing the box to est_w alone is correct — do NOT
+                            # also force a minimum of the original bbox.width,
+                            # that was what left a big empty white rectangle
+                            # whenever the new text was shorter than the old
+                            # full line (and could even bleed into neighboring
+                            # text/underscores that were never meant to be
+                            # touched by this edit).
                             est_w = fitz.get_text_length(final_val, fontname=line_fontname, fontsize=fontsize)
                             box = fitz.Rect(
                                 bbox.x0, bbox.y0 - fontsize * 0.3,
-                                min(bbox.x0 + max(est_w + 4, bbox.width), page_rect.width - 10),
+                                min(bbox.x0 + est_w + 4, page_rect.width - 10),
                                 bbox.y1 + fontsize * 0.3,
                             )
                             page.add_redact_annot(
