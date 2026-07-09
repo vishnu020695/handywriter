@@ -158,6 +158,13 @@ with tab2:
                 "— completely independent of the original file's font data, so it can't "
                 "misalign."
             )
+            st.warning(
+                "⚠️ **If the text sits on an underlined blank**, make the cover box's "
+                "**Bottom (Y1)** stop just above the underline — don't let it reach the "
+                "line itself, or the line will be erased along with the text. Use the "
+                "gridded preview below to find the underline's exact row, then check the "
+                "red box preview before applying."
+            )
             stamp_page_num = st.number_input(
                 "Page number", min_value=1, max_value=doc_pdf.page_count, value=1, key="stamp_page_num"
             )
@@ -178,14 +185,22 @@ with tab2:
             with cb3:
                 cov_x1 = st.number_input("Right (X1)", min_value=0, max_value=stamp_img_w, value=400, key="cov_x1")
             with cb4:
-                cov_y1 = st.number_input("Bottom (Y1)", min_value=0, max_value=stamp_img_h, value=130, key="cov_y1")
+                cov_y1 = st.number_input("Bottom (Y1)", min_value=0, max_value=stamp_img_h, value=125, key="cov_y1")
 
-            # preview with red box overlay at current settings
+            # preview with red box overlay AND a coordinate grid so users can read
+            # off the underline's exact row instead of guessing
             _prev_img = Image.open(io.BytesIO(stamp_pix.tobytes("png"))).convert("RGB")
             from PIL import ImageDraw as _ImgDraw2
             _draw2 = _ImgDraw2.Draw(_prev_img)
+            _grid_step = 50
+            for gx in range(0, stamp_img_w, _grid_step):
+                _draw2.line([(gx, 0), (gx, stamp_img_h)], fill=(255, 150, 150), width=1)
+                _draw2.text((gx + 2, 2), str(gx), fill=(200, 0, 0))
+            for gy in range(0, stamp_img_h, _grid_step):
+                _draw2.line([(0, gy), (stamp_img_w, gy)], fill=(150, 150, 255), width=1)
+                _draw2.text((2, gy + 2), str(gy), fill=(0, 0, 200))
             _draw2.rectangle([cov_x0, cov_y0, cov_x1, cov_y1], outline="red", width=3)
-            st.image(_prev_img, caption=f"Page {stamp_page_num} — red box shows where the cover + new text will go", width=600)
+            st.image(_prev_img, caption=f"Page {stamp_page_num} — red box shows where the cover + new text will go; gridlines every {_grid_step}px help you find the underline's row", width=650)
 
             st.write("**Step 2: New text and font settings**")
             stamp_text = st.text_area("Text to type in that box", key="stamp_text")
