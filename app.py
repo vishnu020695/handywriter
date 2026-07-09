@@ -798,7 +798,7 @@ with tab2:
 
                 if st.button("Apply edits to this page and download"):
                     changed_any = False
-                    edits = []  # (bbox, final_text, fontsize, fontname)
+                    edits = []  # (bbox, final_text, fontsize, fontname, is_blank_field)
                     for (bbox, line_text, fontsize, font_name, flags), new_val in zip(lines_data, edited_values):
                         original_text = line_text.rstrip("\n")
                         if new_val != original_text:
@@ -813,14 +813,16 @@ with tab2:
                             final_leading = new_leading if new_leading else orig_leading
                             final_trailing = new_trailing if new_trailing else orig_trailing
                             final_val = final_leading + new_core + final_trailing
+                            is_blank_field = bool(orig_leading) or bool(orig_trailing)
 
-                            edits.append((fitz.Rect(bbox), final_val, use_size, font_name, flags))
+                            edits.append((fitz.Rect(bbox), final_val, use_size, font_name, flags, is_blank_field))
 
                     if not changed_any:
                         st.info("No changes were made.")
                     else:
                         page_rect = page.rect
-                        for bbox, final_val, fontsize, font_name, flags in edits:
+                        underline_specs = []  # (x0, x1, y) to draw AFTER redactions apply
+                        for bbox, final_val, fontsize, font_name, flags, is_blank_field in edits:
                             # Pick the font for THIS box: auto-match the box's
                             # own original font by default (reusing the actual
                             # embedded font when possible, else a flags-based
@@ -874,7 +876,22 @@ with tab2:
                                 fill=(1, 1, 1),
                                 text_color=(0, 0, 0),
                             )
+                            if is_blank_field:
+                                # Draw a real underline back in ourselves,
+                                # spanning the field's original full width,
+                                # instead of hoping we correctly preserved
+                                # whatever the original blank line was made
+                                # of. This works regardless of whether that
+                                # original line was underscore text or (more
+                                # likely, since text-based preservation kept
+                                # failing) a drawn rule graphic — we're not
+                                # trying to protect it anymore, just putting a
+                                # visible line back afterwards, unconditionally.
+                                underline_specs.append((bbox.x0, bbox.x1, bbox.y1 + fontsize * 0.12))
+
                         page.apply_redactions()
+                        for ux0, ux1, uy in underline_specs:
+                            page.draw_line(fitz.Point(ux0, uy), fitz.Point(ux1, uy), color=(0, 0, 0), width=0.6)
                         out = io.BytesIO(doc_pdf.tobytes())
                         st.success("Edits applied.")
                         st.download_button(
@@ -1064,30 +1081,46 @@ with tab3:
                     if changed:
                         bbox = fitz.Rect(b[:4])
                         fontsize = 11
+                        font_name = None
                         for db in dict_blocks:
                             for line in db.get("lines", []):
                                 for span in line["spans"]:
                                     if fitz.Rect(span["bbox"]).intersects(bbox):
                                         fontsize = span["size"]
-                        edits.append((bbox, new_text.rstrip("\n"), fontsize))
-                for bbox, new_text, fontsize in edits:
-                    page.add_redact_annot(bbox, fill=(1, 1, 1))
-                page.apply_redactions()
+                                        font_name = span.get("font")
+                        edits.append((bbox, new_text.rstrip("\n"), fontsize, font_name))
                 page_rect = page.rect
-                for bbox, new_text, fontsize in edits:
-                    padded = fitz.Rect(
-                        bbox.x0, bbox.y0,
-                        min(bbox.x0 + max(bbox.width, 300), page_rect.width - 36),
-                        bbox.y1,
+                for bbox, new_text, fontsize, font_name in edits:
+                    use_fontname = "helv"
+                    if font_name:
+                        try:
+                            for xref, ext, subtype, basefont, refname, encoding in page.get_fonts(full=True):
+                                if basefont == font_name or font_name in basefont:
+                                    fn, fe, ft, fontbuffer = doc.extract_font(xref)
+                                    if fontbuffer:
+                                        alias = f"mergefont_{xref}"
+                                        page.insert_font(fontname=alias, fontbuffer=fontbuffer)
+                                        use_fontname = alias
+                                    break
+                        except Exception:
+                            pass
+                    try:
+                        est_w = fitz.get_text_length(new_text, fontname=use_fontname, fontsize=fontsize)
+                    except Exception:
+                        est_w = fitz.get_text_length(new_text, fontname="helv", fontsize=fontsize)
+                    # Padding is asymmetric: room above for ascenders, almost
+                    # none below — avoids painting over a drawn underline rule
+                    # that commonly sits just under a blank-field baseline.
+                    box = fitz.Rect(
+                        bbox.x0, bbox.y0 - fontsize * 0.3,
+                        min(bbox.x0 + max(est_w, bbox.width) + 4, page_rect.width - 10),
+                        bbox.y1 + fontsize * 0.05,
                     )
-                    padded.y1 = min(padded.y1 + fontsize * 4, page_rect.height - 36)
-                    size = fontsize
-                    rc = page.insert_textbox(padded, new_text, fontsize=size, fontname="helv")
-                    tries = 0
-                    while rc < 0 and size > 6 and tries < 8:
-                        size -= 1
-                        rc = page.insert_textbox(padded, new_text, fontsize=size, fontname="helv")
-                        tries += 1
+                    page.add_redact_annot(
+                        box, text=new_text, fontname=use_fontname, fontsize=fontsize,
+                        align=fitz.TEXT_ALIGN_LEFT, fill=(1, 1, 1), text_color=(0, 0, 0),
+                    )
+                page.apply_redactions()
             return doc.tobytes()
 
         template_pdf = st.file_uploader("Upload template PDF (with {{TOKENS}})", type=["pdf"], key="mm_template")
