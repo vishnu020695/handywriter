@@ -123,25 +123,23 @@ with tab1:
                             }
 
                     if edits_to_apply:
-                        # Cover only the text area (underline will remain)
-for idx, edit in edits_to_apply.items():
+                        if st.button("💾 Apply Text Replacements & Refresh", use_container_width=True):
 
-    bbox = edit["bbox"]
+                            for idx, edit in edits_to_apply.items():
+                                bbox = edit["bbox"]
+                                tight_bbox = fitz.Rect(
+                                    bbox.x0,
+                                    bbox.y0,
+                                    bbox.x1,
+                                    bbox.y1 - 4
+                                )
+                                page.draw_rect(
+                                    tight_bbox,
+                                    fill=(1,1,1),
+                                    color=None,
+                                    overlay=True
+                                )
 
-    tight_bbox = fitz.Rect(
-        bbox.x0,
-        bbox.y0,
-        bbox.x1,
-        bbox.y1 - 4
-    )
-
-    page.draw_rect(
-        tight_bbox,
-        fill=(1, 1, 1),
-        color=None,
-        overlay=True
-    )
-                            
                             page_rect = page.rect
                             for idx, edit in edits_to_apply.items():
                                 bbox = edit["bbox"]
