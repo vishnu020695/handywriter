@@ -12,6 +12,7 @@ HOW TO RUN (see README.md for full details):
 
 import io
 import os
+import re
 import tempfile
 import zipfile
 
@@ -726,39 +727,73 @@ with tab2:
                 }
                 line_fontname = _line_font_map[line_font_choice]["bold" if line_bold else "regular"]
 
+                def _split_filler_ends(text):
+                    """Split off any leading/trailing blank-line filler
+                    (underscore runs) from a line's text, returning
+                    (leading_filler, core, trailing_filler). This lets us put
+                    the blank-line ends back automatically even if the user's
+                    edit didn't retype them — which is what silently erased
+                    the underline under a name before: the box for a line is
+                    its ENTIRE row including any underscores on either side,
+                    so typing a plain name over that row drops them unless we
+                    explicitly restore them here."""
+                    core = text
+                    leading = trailing = ""
+                    m1 = re.match(r'^([_\s]{3,})', core)
+                    if m1 and set(m1.group(1).replace(" ", "")) == {"_"}:
+                        leading = m1.group(1)
+                        core = core[len(leading):]
+                    m2 = re.search(r'([_\s]{3,})$', core)
+                    if m2 and set(m2.group(1).replace(" ", "")) == {"_"}:
+                        trailing = m2.group(1)
+                        core = core[:len(core) - len(trailing)]
+                    return leading, core, trailing
+
                 if st.button("Apply edits to this page and download"):
                     changed_any = False
-                    edits = []  # (bbox, new_text, fontsize)
+                    edits = []  # (bbox, final_text, fontsize)
                     for (bbox, line_text, fontsize), new_val in zip(lines_data, edited_values):
                         original_text = line_text.rstrip("\n")
                         if new_val != original_text:
                             changed_any = True
                             use_size = line_size_override if line_size_override > 0 else fontsize
-                            edits.append((fitz.Rect(bbox), new_val, use_size))
+
+                            # Preserve the original blank-line underscores
+                            # automatically unless the user's own edit already
+                            # supplied its own leading/trailing filler.
+                            orig_leading, _, orig_trailing = _split_filler_ends(original_text)
+                            new_leading, new_core, new_trailing = _split_filler_ends(new_val)
+                            final_leading = new_leading if new_leading else orig_leading
+                            final_trailing = new_trailing if new_trailing else orig_trailing
+                            final_val = final_leading + new_core + final_trailing
+
+                            edits.append((fitz.Rect(bbox), final_val, use_size))
 
                     if not changed_any:
                         st.info("No changes were made.")
                     else:
-                        for bbox, new_val, fontsize in edits:
-                            page.add_redact_annot(bbox, fill=(1, 1, 1))
-                        page.apply_redactions()
                         page_rect = page.rect
-                        for bbox, new_val, fontsize in edits:
-                            # Give the box room to grow (in case new text is longer than old)
-                            padded = fitz.Rect(
-                                bbox.x0,
-                                bbox.y0,
-                                min(bbox.x0 + max(bbox.width, 300), page_rect.width - 20),
-                                bbox.y1,
+                        for bbox, final_val, fontsize in edits:
+                            # Measure with the ACTUAL font being used (accurate
+                            # for Base-14 fonts) instead of assuming a fixed
+                            # 300pt-wide box — that old approach either clipped
+                            # long text or left a big empty gap for short text.
+                            est_w = fitz.get_text_length(final_val, fontname=line_fontname, fontsize=fontsize)
+                            box = fitz.Rect(
+                                bbox.x0, bbox.y0 - fontsize * 0.3,
+                                min(bbox.x0 + max(est_w + 4, bbox.width), page_rect.width - 10),
+                                bbox.y1 + fontsize * 0.3,
                             )
-                            padded.y1 = min(padded.y1 + fontsize * 3, page_rect.height - 20)
-                            size = fontsize
-                            rc = page.insert_textbox(padded, new_val, fontsize=size, fontname=line_fontname)
-                            tries = 0
-                            while rc < 0 and size > 6 and tries < 8:
-                                size -= 1
-                                rc = page.insert_textbox(padded, new_val, fontsize=size, fontname="helv")
-                                tries += 1
+                            page.add_redact_annot(
+                                box,
+                                text=final_val,
+                                fontname=line_fontname,
+                                fontsize=fontsize,
+                                align=fitz.TEXT_ALIGN_LEFT,
+                                fill=(1, 1, 1),
+                                text_color=(0, 0, 0),
+                            )
+                        page.apply_redactions()
                         out = io.BytesIO(doc_pdf.tobytes())
                         st.success("Edits applied.")
                         st.download_button(
