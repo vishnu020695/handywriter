@@ -12,7 +12,6 @@ HOW TO RUN (see README.md for full details):
 
 import io
 import os
-import re
 import tempfile
 import zipfile
 
@@ -318,143 +317,6 @@ with tab2:
                     if not any_found:
                         st.info("No matches found for any entry — nothing will change if you apply now.")
 
-            def _flags_to_base14(flags, serif_hint):
-                """Guess the closest Base-14 font from PyMuPDF span flags."""
-                italic = bool(flags & 2)
-                bold = bool(flags & 16)
-                mono = bool(flags & 8)
-                serif = serif_hint or bool(flags & 4)
-                if mono:
-                    if bold and italic: return "cobi"
-                    if bold: return "cobo"
-                    if italic: return "coit"
-                    return "cour"
-                if serif:
-                    if bold and italic: return "tibi"
-                    if bold: return "tibo"
-                    if italic: return "tiit"
-                    return "tiro"
-                if bold and italic: return "hebi"
-                if bold: return "hebo"
-                if italic: return "heit"
-                return "helv"
-
-            def _find_line_for_rect(page, rect):
-                """Return the full text line dict that contains rect."""
-                text_dict = page.get_text("dict")
-                cy = (rect.y0 + rect.y1) / 2
-                best = None
-                for block in text_dict.get("blocks", []):
-                    for line in block.get("lines", []):
-                        bbox = line["bbox"]
-                        if bbox[1] - 1 <= cy <= bbox[3] + 1:
-                            best = line
-                            break
-                    if best:
-                        break
-                return best
-
-            font_buffer_cache = {}
-
-            def _embedded_font_alias(page, span_font_name, want_bold=False):
-                """Try to pull the ACTUAL embedded font used by the original text,
-                so the replacement matches the certificate's real typeface instead
-                of falling back to a generic Base-14 font. If want_bold is True,
-                only accept a font that is actually bold (either a genuine bold
-                sibling like 'Arial-Bold', or the original font itself if IT is
-                already the bold weight) — never silently hand back a regular
-                weight when the user asked for bold."""
-                try:
-                    candidates = list(page.get_fonts(full=True))
-                    family_root = (span_font_name or "").split("-")[0].split(",")[0].lower()
-
-                    if want_bold:
-                        # 1) look for a genuine bold sibling of the same family
-                        for xref, ext, subtype, basefont, refname, encoding in candidates:
-                            bf_lower = basefont.lower()
-                            if family_root and family_root in bf_lower and "bold" in bf_lower:
-                                fontname, fontext, fonttype, fontbuffer = doc_pdf.extract_font(xref)
-                                if fontbuffer:
-                                    alias = f"embedded_{xref}"
-                                    page.insert_font(fontname=alias, fontbuffer=fontbuffer)
-                                    font_buffer_cache[alias] = fontbuffer
-                                    return alias
-                        # 2) the original font itself is already bold-named
-                        if span_font_name and "bold" in span_font_name.lower():
-                            for xref, ext, subtype, basefont, refname, encoding in candidates:
-                                if basefont == span_font_name:
-                                    fontname, fontext, fonttype, fontbuffer = doc_pdf.extract_font(xref)
-                                    if fontbuffer:
-                                        alias = f"embedded_{xref}"
-                                        page.insert_font(fontname=alias, fontbuffer=fontbuffer)
-                                        font_buffer_cache[alias] = fontbuffer
-                                        return alias
-                        # no real bold variant embedded in this PDF — tell the caller
-                        # so it can fall back to a synthetic bold instead of silently
-                        # rendering regular weight
-                        return None
-
-                    # regular weight: reuse the exact original font
-                    for xref, ext, subtype, basefont, refname, encoding in candidates:
-                        if basefont == span_font_name or (span_font_name and span_font_name in basefont):
-                            fontname, fontext, fonttype, fontbuffer = doc_pdf.extract_font(xref)
-                            if fontbuffer:
-                                alias = f"embedded_{xref}"
-                                page.insert_font(fontname=alias, fontbuffer=fontbuffer)
-                                font_buffer_cache[alias] = fontbuffer
-                                return alias
-                except Exception:
-                    pass
-                return None
-
-            def _measure_width(text, fontname, fontsize):
-                """Measure text width using the ACTUAL font it will be drawn
-                in, not a generic Helvetica guess. Using the wrong font's
-                metrics is what caused the width estimate to be badly off —
-                too small (text got shrunk to fit) or, when over-compensated
-                with a flat safety margin, too large (the box spilled into
-                neighboring real text like a dash or the next word)."""
-                try:
-                    if fontname in font_buffer_cache:
-                        return fitz.Font(fontbuffer=font_buffer_cache[fontname]).text_length(text, fontsize=fontsize)
-                    return fitz.Font(fontname=fontname).text_length(text, fontsize=fontsize)
-                except Exception:
-                    return fitz.get_text_length(text, fontname="helv", fontsize=fontsize)
-
-            def _is_filler_span(text):
-                """Detect blank-line filler such as long underscore runs used
-                for 'fill in the blank' fields (e.g. the name/department lines
-                on a certificate)."""
-                stripped = text.replace(" ", "")
-                if not stripped:
-                    return True
-                filler_chars = set("_.-")
-                return len(stripped) >= 3 and all(ch in filler_chars for ch in stripped)
-
-            def _adjacent_fillers(line, rect):
-                """Return the immediately adjacent filler spans (left/right) of
-                the span containing rect, as (text, bbox, font, size) tuples —
-                so callers can re-queue them for redraw whenever a wider
-                replacement's box might encroach on that blank-line ink."""
-                if not line or not line.get("spans"):
-                    return []
-                spans = line["spans"]
-                match_idx = None
-                for i, s in enumerate(spans):
-                    if fitz.Rect(s["bbox"]).intersects(rect):
-                        match_idx = i
-                        break
-                if match_idx is None:
-                    return []
-                out = []
-                if match_idx - 1 >= 0 and _is_filler_span(spans[match_idx - 1]["text"]):
-                    s = spans[match_idx - 1]
-                    out.append((s["text"], fitz.Rect(s["bbox"]), s.get("font"), s["size"]))
-                if match_idx + 1 < len(spans) and _is_filler_span(spans[match_idx + 1]["text"]):
-                    s = spans[match_idx + 1]
-                    out.append((s["text"], fitz.Rect(s["bbox"]), s.get("font"), s["size"]))
-                return out
-
             if st.button("Apply Find & Replace to entire PDF"):
                 if not fr_pairs:
                     st.warning("Enter at least one 'Find' value.")
@@ -462,121 +324,33 @@ with tab2:
                     total_replacements = 0
                     for page in doc_pdf:
                         page_rect = page.rect
-                        annots_queued = 0
-                        # Queue EVERY match for EVERY find/replace pair FIRST,
-                        # all measured against the original, untouched page —
-                        # then apply them all in one atomic pass at the end.
-                        # This is the key fix: nothing is redrawn until every
-                        # match has already been located, so an earlier
-                        # replacement can never shift the page and invalidate
-                        # a later match's coordinates (which is what caused
-                        # the repeated "202 2027 202 2027" corruption before).
                         for find_val, replace_val in fr_pairs:
                             rects = page.search_for(find_val)
                             for rect in rects:
-                                line = _find_line_for_rect(page, rect)
                                 fontsize = 11
-                                span_font_name = None
-                                span_flags = 0
-                                if line and line.get("spans"):
-                                    for s in line["spans"]:
-                                        if fitz.Rect(s["bbox"]).intersects(rect):
-                                            fontsize = s["size"]
-                                            span_font_name = s.get("font")
-                                            span_flags = s.get("flags", 0)
-                                            break
-
-                                # Sanity-check the detected font size against the
-                                # match's own rectangle height (a hard geometric
-                                # fact from search_for, always reliable). If the
-                                # span lookup returned something implausibly
-                                # small — e.g. it grabbed a neighboring span with
-                                # different metrics — this is what made replaced
-                                # numbers render tiny and float like superscript.
-                                height_based_size = rect.height / 1.15
-                                if fontsize < height_based_size * 0.7:
-                                    fontsize = height_based_size
-
+                                metrics = page.get_text("dict", clip=rect)
+                                try:
+                                    fontsize = metrics["blocks"][0]["lines"][0]["spans"][0]["size"]
+                                except Exception:
+                                    pass
                                 if fr_size_override > 0:
                                     fontsize = fr_size_override
-
-                                use_fontname = fr_fontname
-                                if font_choice == "Default (Helvetica)" and span_font_name:
-                                    embedded_alias = _embedded_font_alias(page, span_font_name, want_bold=fr_bold)
-                                    if embedded_alias:
-                                        use_fontname = embedded_alias
-                                    else:
-                                        effective_flags = span_flags | 16 if fr_bold else span_flags
-                                        use_fontname = _flags_to_base14(effective_flags, serif_hint=True)
-
-                                # Measure the replacement using its ACTUAL font
-                                # (embedded font or the real Base-14 we picked),
-                                # not a generic Helvetica guess — that mismatch
-                                # is what previously caused either shrinking
-                                # (underestimate) or spilling into neighboring
-                                # text like a dash or the next word (overshoot).
-                                # No flat safety margin is added anymore: since
-                                # the measurement is now accurate, any extra
-                                # padding just shows up as a visible blank gap
-                                # before whatever character comes right after
-                                # (e.g. "2066  -" instead of "2066 -") — which
-                                # is exactly the kind of seam that makes an
-                                # edit look like an edit. Only widen the box
-                                # when the new text genuinely needs more room.
-                                est_w = _measure_width(replace_val, use_fontname, fontsize)
-                                extra_w = max(0, est_w - rect.width)
-                                # Vertical padding is asymmetric on purpose:
-                                # generous ABOVE the text (room for ascenders),
-                                # almost none BELOW it — a blank "fill in the
-                                # blank" line is very often a drawn rule
-                                # graphic just under the baseline, not
-                                # underscore text, so the safest way to avoid
-                                # ever painting over it is to keep the box's
-                                # bottom edge close to the text itself.
-                                vpad_top = fontsize * 0.3
-                                vpad_bottom = fontsize * 0.05
-                                box_x1 = min(rect.x1 + extra_w, page_rect.width - 5)
-                                box = fitz.Rect(
-                                    rect.x0, rect.y0 - vpad_top,
-                                    box_x1,
-                                    rect.y1 + vpad_bottom,
+                                page.add_redact_annot(rect, fill=(1, 1, 1))
+                                page.apply_redactions()
+                                padded = fitz.Rect(
+                                    rect.x0, rect.y0,
+                                    min(rect.x0 + max(rect.width, 300), page_rect.width - 20),
+                                    rect.y1,
                                 )
-
-                                # If this widened box now reaches into an
-                                # adjacent blank-line filler (underscores),
-                                # queue that filler for redraw too — unchanged
-                                # text, same spot — so the blank line stays
-                                # continuous instead of losing ink where the
-                                # box overlapped it.
-                                for f_text, f_bbox, f_font, f_size in _adjacent_fillers(line, rect):
-                                    if box.intersects(f_bbox):
-                                        f_alias = _embedded_font_alias(page, f_font, want_bold=False) or "tiro"
-                                        page.add_redact_annot(
-                                            f_bbox,
-                                            text=f_text,
-                                            fontname=f_alias,
-                                            fontsize=f_size,
-                                            align=fitz.TEXT_ALIGN_LEFT,
-                                            fill=(1, 1, 1),
-                                            text_color=(0, 0, 0),
-                                        )
-                                        annots_queued += 1
-
-                                page.add_redact_annot(
-                                    box,
-                                    text=replace_val,
-                                    fontname=use_fontname,
-                                    fontsize=fontsize,
-                                    align=fitz.TEXT_ALIGN_LEFT,
-                                    fill=(1, 1, 1),
-                                    text_color=(0, 0, 0),
-                                )
-                                annots_queued += 1
+                                padded.y1 = min(padded.y1 + fontsize * 3, page_rect.height - 20)
+                                size = fontsize
+                                rc = page.insert_textbox(padded, replace_val, fontsize=size, fontname=fr_fontname)
+                                tries = 0
+                                while rc < 0 and size > 6 and tries < 8:
+                                    size -= 1
+                                    rc = page.insert_textbox(padded, replace_val, fontsize=size, fontname=fr_fontname)
+                                    tries += 1
                                 total_replacements += 1
-
-                        if annots_queued:
-                            page.apply_redactions()
-
                     if total_replacements == 0:
                         st.warning("None of the 'Find' text was found in this PDF. Check spelling/spacing matches exactly.")
                     else:
@@ -597,45 +371,8 @@ with tab2:
                 "Edit any box, then apply — text is placed in the same spot and size, "
                 "so nothing shifts or misaligns."
             )
-
-            st.markdown("##### 🔍 Find it first — search every page")
-            st.caption(
-                "On a multi-page document it's much faster to search across all pages "
-                "than to open each one and hunt through its boxes."
-            )
-            global_query = st.text_input(
-                "Search across ALL pages for text you want to edit", key="el_global_query"
-            )
-            if global_query.strip():
-                q = global_query.strip().lower()
-                results = []  # (page_index, snippet)
-                for pi in range(doc_pdf.page_count):
-                    pg_td = doc_pdf[pi].get_text("dict")
-                    for db in pg_td["blocks"]:
-                        for ln in db.get("lines", []):
-                            txt = "".join(s["text"] for s in ln["spans"]).strip()
-                            if txt and q in txt.lower():
-                                results.append((pi, txt))
-                if not results:
-                    st.warning("That text wasn't found on any page.")
-                else:
-                    pages_hit = sorted(set(r[0] + 1 for r in results))
-                    st.write(f"Found on page(s): **{', '.join(str(p) for p in pages_hit)}** "
-                             f"({len(results)} matching line(s) total). Click one to jump straight there:")
-                    for result_idx, (pi, snippet) in enumerate(results[:40]):
-                        label = f"Page {pi + 1}: {snippet[:80]}"
-                        if st.button(label, key=f"jump_{result_idx}_{pi}"):
-                            st.session_state["el_page_num"] = pi + 1
-                            st.session_state[f"line_search_{pi}"] = global_query
-                            st.rerun()
-                    if len(results) > 40:
-                        st.caption(f"...and {len(results) - 40} more matches not shown here.")
-            st.markdown("---")
-
-            if "el_page_num" not in st.session_state:
-                st.session_state["el_page_num"] = 1
             page_num = st.number_input(
-                "Page number to edit", min_value=1, max_value=doc_pdf.page_count, key="el_page_num"
+                "Page number to edit", min_value=1, max_value=doc_pdf.page_count, value=1
             )
             page_index = page_num - 1
             page = doc_pdf[page_index]
@@ -646,48 +383,24 @@ with tab2:
             # side by side on a certificate) as separate editable boxes, while still
             # keeping normal sentences/paragraphs as single boxes.
             text_dict = page.get_text("dict")
-            lines_data = []  # list of (bbox, text, fontsize, font_name, flags)
+            lines_data = []  # list of (bbox, text, fontsize)
             for db in text_dict["blocks"]:
                 for line in db.get("lines", []):
                     line_text = "".join(s["text"] for s in line["spans"])
                     if line_text.strip():
                         fontsize = line["spans"][0]["size"] if line["spans"] else 11
-                        font_name = line["spans"][0].get("font") if line["spans"] else None
-                        flags = line["spans"][0].get("flags", 0) if line["spans"] else 0
-                        lines_data.append((line["bbox"], line_text, fontsize, font_name, flags))
+                        lines_data.append((line["bbox"], line_text, fontsize))
 
-            search_query = st.text_input(
-                "🔍 Type part of the text you want to change (leave empty to see every box)",
-                key=f"line_search_{page_index}",
-            )
-            if search_query.strip():
-                matching_idx = {
-                    i for i, (_, text, _, _, _) in enumerate(lines_data)
-                    if search_query.strip().lower() in text.lower()
-                }
-                if not matching_idx:
-                    st.warning("No text on this page matches that — showing every box instead.")
-                    matching_idx = set(range(len(lines_data)))
-            else:
-                matching_idx = set(range(len(lines_data)))
-
-            # Draw numbered boxes on the preview so boxes map visually to the page.
-            # Matches (or everything, if no search yet) are outlined in red and
-            # numbered; anything filtered out by the search is a faint gray so the
-            # page doesn't turn into unreadable clutter but you can still see where
-            # everything sits.
+            # Draw numbered boxes on the preview so boxes map visually to the page
             zoom = 1.3
             pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
             from PIL import Image as PILImage, ImageDraw
             preview_img = PILImage.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
             draw = ImageDraw.Draw(preview_img)
-            for i, (bbox, _, _, _, _) in enumerate(lines_data):
+            for i, (bbox, _, _) in enumerate(lines_data):
                 x0, y0, x1, y1 = [v * zoom for v in bbox]
-                if i in matching_idx:
-                    draw.rectangle([x0, y0, x1, y1], outline="red", width=2)
-                    draw.text((x0, max(0, y0 - 14)), f"#{i + 1}", fill="red")
-                else:
-                    draw.rectangle([x0, y0, x1, y1], outline=(200, 200, 200), width=1)
+                draw.rectangle([x0, y0, x1, y1], outline="red", width=2)
+                draw.text((x0, max(0, y0 - 14)), f"#{i + 1}", fill="red")
             st.image(preview_img, caption=f"Page {page_num} — boxes numbered to match the list below", width=500)
 
             if not lines_data:
@@ -696,202 +409,69 @@ with tab2:
                     "Use the 'Image → Word/Excel' tab instead, or the PDF-to-Word conversion below."
                 )
             else:
-                shown_count = len(matching_idx)
-                if search_query.strip():
-                    st.write(f"**{shown_count}** of {len(lines_data)} boxes match — only these are shown below:")
-                else:
-                    st.write(f"**{len(lines_data)}** editable text lines found on this page:")
+                st.write(f"**{len(lines_data)}** editable text lines found on this page:")
                 edited_values = []
-                for i, (bbox, line_text, fontsize, font_name, flags) in enumerate(lines_data):
+                for i, (bbox, line_text, fontsize) in enumerate(lines_data):
                     original_text = line_text.rstrip("\n")
-                    if i not in matching_idx:
-                        # keep the value unchanged for boxes hidden by the filter,
-                        # but don't render a text_area for them so the list stays short
-                        edited_values.append(original_text)
-                        continue
                     val = st.text_area(
                         f"Box #{i + 1}", original_text, height=68, key=f"line_{page_index}_{i}"
                     )
                     edited_values.append(val)
 
-                st.write("**Font for edited boxes:**")
+                st.write("**Font settings for edited boxes:**")
                 lf1, lf2, lf3 = st.columns(3)
                 with lf1:
                     line_font_choice = st.selectbox(
-                        "Font", ["Auto-match original", "Force Helvetica", "Force Times New Roman", "Force Courier (monospace)"],
+                        "Font", ["Default (Helvetica)", "Times New Roman", "Courier (monospace)"],
                         key=f"line_font_choice_{page_index}",
-                        help="Auto-match tries to reuse each box's own original font "
-                             "(so a bold heading stays bold Times, a plain line stays plain, etc). "
-                             "Only pick a forced font if you specifically want to override that.",
                     )
                 with lf2:
-                    line_bold = st.checkbox("Force Bold", key=f"line_bold_{page_index}")
+                    line_bold = st.checkbox("Bold", key=f"line_bold_{page_index}")
                 with lf3:
                     line_size_override = st.number_input(
                         "Font size (0 = auto-match original)", min_value=0, max_value=200, value=0,
                         key=f"line_size_{page_index}",
                     )
                 _line_font_map = {
-                    "Force Helvetica": {"regular": "helv", "bold": "hebo"},
-                    "Force Times New Roman": {"regular": "tiro", "bold": "tibo"},
-                    "Force Courier (monospace)": {"regular": "cour", "bold": "cobo"},
+                    "Default (Helvetica)": {"regular": "helv", "bold": "hebo"},
+                    "Times New Roman": {"regular": "tiro", "bold": "tibo"},
+                    "Courier (monospace)": {"regular": "cour", "bold": "cobo"},
                 }
-
-                def _line_flags_to_base14(flags, serif_hint, force_bold):
-                    italic = bool(flags & 2)
-                    bold = bool(flags & 16) or force_bold
-                    mono = bool(flags & 8)
-                    serif = serif_hint or bool(flags & 4)
-                    if mono:
-                        return "cobi" if (bold and italic) else "cobo" if bold else "coit" if italic else "cour"
-                    if serif:
-                        return "tibi" if (bold and italic) else "tibo" if bold else "tiit" if italic else "tiro"
-                    return "hebi" if (bold and italic) else "hebo" if bold else "heit" if italic else "helv"
-
-                _line_font_cache = {}
-
-                def _line_embedded_font_alias(page, span_font_name):
-                    """Reuse the box's ACTUAL original embedded font, so text
-                    that's already the right typeface (e.g. bold Times for a
-                    heading) doesn't get flattened into generic Helvetica —
-                    that mismatch is what made an edited sentence look like a
-                    pasted-in block before."""
-                    if not span_font_name:
-                        return None
-                    if span_font_name in _line_font_cache:
-                        return _line_font_cache[span_font_name]
-                    try:
-                        for xref, ext, subtype, basefont, refname, encoding in page.get_fonts(full=True):
-                            if basefont == span_font_name or span_font_name in basefont:
-                                fontname, fontext, fonttype, fontbuffer = doc_pdf.extract_font(xref)
-                                if fontbuffer:
-                                    alias = f"lineembed_{xref}"
-                                    page.insert_font(fontname=alias, fontbuffer=fontbuffer)
-                                    _line_font_cache[span_font_name] = alias
-                                    return alias
-                    except Exception:
-                        pass
-                    _line_font_cache[span_font_name] = None
-                    return None
-
-                def _split_filler_ends(text):
-                    """Split off any leading/trailing blank-line filler
-                    (underscore runs) from a line's text, returning
-                    (leading_filler, core, trailing_filler). This lets us put
-                    the blank-line ends back automatically even if the user's
-                    edit didn't retype them — which is what silently erased
-                    the underline under a name before: the box for a line is
-                    its ENTIRE row including any underscores on either side,
-                    so typing a plain name over that row drops them unless we
-                    explicitly restore them here."""
-                    core = text
-                    leading = trailing = ""
-                    m1 = re.match(r'^([_\s]{3,})', core)
-                    if m1 and set(m1.group(1).replace(" ", "")) == {"_"}:
-                        leading = m1.group(1)
-                        core = core[len(leading):]
-                    m2 = re.search(r'([_\s]{3,})$', core)
-                    if m2 and set(m2.group(1).replace(" ", "")) == {"_"}:
-                        trailing = m2.group(1)
-                        core = core[:len(core) - len(trailing)]
-                    return leading, core, trailing
+                line_fontname = _line_font_map[line_font_choice]["bold" if line_bold else "regular"]
 
                 if st.button("Apply edits to this page and download"):
                     changed_any = False
-                    edits = []  # (bbox, final_text, fontsize, fontname, is_blank_field)
-                    for (bbox, line_text, fontsize, font_name, flags), new_val in zip(lines_data, edited_values):
+                    edits = []  # (bbox, new_text, fontsize)
+                    for (bbox, line_text, fontsize), new_val in zip(lines_data, edited_values):
                         original_text = line_text.rstrip("\n")
                         if new_val != original_text:
                             changed_any = True
                             use_size = line_size_override if line_size_override > 0 else fontsize
-
-                            # Preserve the original blank-line underscores
-                            # automatically unless the user's own edit already
-                            # supplied its own leading/trailing filler.
-                            orig_leading, _, orig_trailing = _split_filler_ends(original_text)
-                            new_leading, new_core, new_trailing = _split_filler_ends(new_val)
-                            final_leading = new_leading if new_leading else orig_leading
-                            final_trailing = new_trailing if new_trailing else orig_trailing
-                            final_val = final_leading + new_core + final_trailing
-                            is_blank_field = bool(orig_leading) or bool(orig_trailing)
-
-                            edits.append((fitz.Rect(bbox), final_val, use_size, font_name, flags, is_blank_field))
+                            edits.append((fitz.Rect(bbox), new_val, use_size))
 
                     if not changed_any:
                         st.info("No changes were made.")
                     else:
-                        page_rect = page.rect
-                        underline_specs = []  # (x0, x1, y) to draw AFTER redactions apply
-                        for bbox, final_val, fontsize, font_name, flags, is_blank_field in edits:
-                            # Pick the font for THIS box: auto-match the box's
-                            # own original font by default (reusing the actual
-                            # embedded font when possible, else a flags-based
-                            # Base-14 guess), or use the user's forced choice
-                            # if they explicitly picked one.
-                            if line_font_choice == "Auto-match original":
-                                alias = _line_embedded_font_alias(page, font_name)
-                                use_fontname = alias or _line_flags_to_base14(flags, serif_hint=True, force_bold=line_bold)
-                            else:
-                                use_fontname = _line_font_map[line_font_choice]["bold" if line_bold else "regular"]
-
-                            # Measure with the ACTUAL font being used (accurate
-                            # for Base-14 fonts) instead of assuming a fixed
-                            # 300pt-wide box — that old approach either clipped
-                            # long text or left a big empty gap for short text.
-                            # Note: final_val already has any preserved filler
-                            # (underscores) folded in by _split_filler_ends, so
-                            # sizing the box to est_w alone is correct — do NOT
-                            # also force a minimum of the original bbox.width,
-                            # that was what left a big empty white rectangle
-                            # whenever the new text was shorter than the old
-                            # full line (and could even bleed into neighboring
-                            # text/underscores that were never meant to be
-                            # touched by this edit).
-                            try:
-                                est_w = fitz.get_text_length(final_val, fontname=use_fontname, fontsize=fontsize)
-                            except Exception:
-                                est_w = fitz.get_text_length(final_val, fontname="helv", fontsize=fontsize)
-                            # Padding is asymmetric on purpose: generous ABOVE
-                            # the text (room for ascenders/accents), but almost
-                            # none BELOW it. A blank "fill in the name" line on
-                            # a certificate is very often a drawn rule/line
-                            # graphic sitting just under the baseline, not
-                            # underscore characters — no amount of text-based
-                            # filler detection can protect a line like that,
-                            # since it isn't text at all. The only real
-                            # protection is to make sure our white redaction
-                            # fill never reaches down far enough to paint over
-                            # it in the first place.
-                            box = fitz.Rect(
-                                bbox.x0, bbox.y0 - fontsize * 0.3,
-                                min(bbox.x0 + est_w + 4, page_rect.width - 10),
-                                bbox.y1 + fontsize * 0.05,
-                            )
-                            page.add_redact_annot(
-                                box,
-                                text=final_val,
-                                fontname=use_fontname,
-                                fontsize=fontsize,
-                                align=fitz.TEXT_ALIGN_LEFT,
-                                fill=(1, 1, 1),
-                                text_color=(0, 0, 0),
-                            )
-                            if is_blank_field:
-                                # Draw a real underline back in ourselves,
-                                # spanning the field's original full width,
-                                # instead of hoping we correctly preserved
-                                # whatever the original blank line was made
-                                # of. This works regardless of whether that
-                                # original line was underscore text or (more
-                                # likely, since text-based preservation kept
-                                # failing) a drawn rule graphic — we're not
-                                # trying to protect it anymore, just putting a
-                                # visible line back afterwards, unconditionally.
-                                underline_specs.append((bbox.x0, bbox.x1, bbox.y1 + fontsize * 0.12))
-
+                        for bbox, new_val, fontsize in edits:
+                            page.add_redact_annot(bbox, fill=(1, 1, 1))
                         page.apply_redactions()
-                        for ux0, ux1, uy in underline_specs:
-                            page.draw_line(fitz.Point(ux0, uy), fitz.Point(ux1, uy), color=(0, 0, 0), width=0.6)
+                        page_rect = page.rect
+                        for bbox, new_val, fontsize in edits:
+                            # Give the box room to grow (in case new text is longer than old)
+                            padded = fitz.Rect(
+                                bbox.x0,
+                                bbox.y0,
+                                min(bbox.x0 + max(bbox.width, 300), page_rect.width - 20),
+                                bbox.y1,
+                            )
+                            padded.y1 = min(padded.y1 + fontsize * 3, page_rect.height - 20)
+                            size = fontsize
+                            rc = page.insert_textbox(padded, new_val, fontsize=size, fontname=line_fontname)
+                            tries = 0
+                            while rc < 0 and size > 6 and tries < 8:
+                                size -= 1
+                                rc = page.insert_textbox(padded, new_val, fontsize=size, fontname="helv")
+                                tries += 1
                         out = io.BytesIO(doc_pdf.tobytes())
                         st.success("Edits applied.")
                         st.download_button(
@@ -1081,46 +661,30 @@ with tab3:
                     if changed:
                         bbox = fitz.Rect(b[:4])
                         fontsize = 11
-                        font_name = None
                         for db in dict_blocks:
                             for line in db.get("lines", []):
                                 for span in line["spans"]:
                                     if fitz.Rect(span["bbox"]).intersects(bbox):
                                         fontsize = span["size"]
-                                        font_name = span.get("font")
-                        edits.append((bbox, new_text.rstrip("\n"), fontsize, font_name))
-                page_rect = page.rect
-                for bbox, new_text, fontsize, font_name in edits:
-                    use_fontname = "helv"
-                    if font_name:
-                        try:
-                            for xref, ext, subtype, basefont, refname, encoding in page.get_fonts(full=True):
-                                if basefont == font_name or font_name in basefont:
-                                    fn, fe, ft, fontbuffer = doc.extract_font(xref)
-                                    if fontbuffer:
-                                        alias = f"mergefont_{xref}"
-                                        page.insert_font(fontname=alias, fontbuffer=fontbuffer)
-                                        use_fontname = alias
-                                    break
-                        except Exception:
-                            pass
-                    try:
-                        est_w = fitz.get_text_length(new_text, fontname=use_fontname, fontsize=fontsize)
-                    except Exception:
-                        est_w = fitz.get_text_length(new_text, fontname="helv", fontsize=fontsize)
-                    # Padding is asymmetric: room above for ascenders, almost
-                    # none below — avoids painting over a drawn underline rule
-                    # that commonly sits just under a blank-field baseline.
-                    box = fitz.Rect(
-                        bbox.x0, bbox.y0 - fontsize * 0.3,
-                        min(bbox.x0 + max(est_w, bbox.width) + 4, page_rect.width - 10),
-                        bbox.y1 + fontsize * 0.05,
-                    )
-                    page.add_redact_annot(
-                        box, text=new_text, fontname=use_fontname, fontsize=fontsize,
-                        align=fitz.TEXT_ALIGN_LEFT, fill=(1, 1, 1), text_color=(0, 0, 0),
-                    )
+                        edits.append((bbox, new_text.rstrip("\n"), fontsize))
+                for bbox, new_text, fontsize in edits:
+                    page.add_redact_annot(bbox, fill=(1, 1, 1))
                 page.apply_redactions()
+                page_rect = page.rect
+                for bbox, new_text, fontsize in edits:
+                    padded = fitz.Rect(
+                        bbox.x0, bbox.y0,
+                        min(bbox.x0 + max(bbox.width, 300), page_rect.width - 36),
+                        bbox.y1,
+                    )
+                    padded.y1 = min(padded.y1 + fontsize * 4, page_rect.height - 36)
+                    size = fontsize
+                    rc = page.insert_textbox(padded, new_text, fontsize=size, fontname="helv")
+                    tries = 0
+                    while rc < 0 and size > 6 and tries < 8:
+                        size -= 1
+                        rc = page.insert_textbox(padded, new_text, fontsize=size, fontname="helv")
+                        tries += 1
             return doc.tobytes()
 
         template_pdf = st.file_uploader("Upload template PDF (with {{TOKENS}})", type=["pdf"], key="mm_template")
@@ -1212,13 +776,79 @@ with tab3:
                 base_image = Image.open(coord_template).convert("RGB")
 
             W, H = base_image.size
-            st.image(base_image, caption=f"Template preview ({W}×{H}px) — use these pixel coordinates below", width=500)
+
+            grid_img = base_image.copy()
+            _gdraw = ImageDraw.Draw(grid_img)
+            grid_step = 100
+            for gx in range(0, W, grid_step):
+                _gdraw.line([(gx, 0), (gx, H)], fill=(255, 0, 0), width=1)
+                _gdraw.text((gx + 2, 2), str(gx), fill=(255, 0, 0))
+            for gy in range(0, H, grid_step):
+                _gdraw.line([(0, gy), (W, gy)], fill=(0, 120, 255), width=1)
+                _gdraw.text((2, gy + 2), str(gy), fill=(0, 120, 255))
+            st.image(
+                grid_img,
+                caption=f"Template with coordinate grid ({W}×{H}px, lines every {grid_step}px) — "
+                        f"read the X (red, top) and Y (blue, left) numbers nearest each blank to estimate its position",
+                width=650,
+            )
+            with st.expander("Show template without grid lines"):
+                st.image(base_image, caption=f"Clean preview ({W}×{H}px)", width=500)
 
             wb = openpyxl.load_workbook(io.BytesIO(coord_excel.read()))
             ws = wb.active
             headers = [c.value for c in ws[1] if c.value is not None]
             rows = list(ws.iter_rows(min_row=2, values_only=True))
             st.info(f"Found **{len(rows)}** rows and columns: {', '.join(str(h) for h in headers)}")
+
+            st.write("#### 3. Set the X/Y position for each field (same position used for every student)")
+            st.info(
+                "💡 If the template already has a filled-in example (like a sample name), set "
+                "**Cover width/height** big enough to fully paint over it — otherwise the old "
+                "text will show through underneath your new text.\n\n"
+                "⚠️ **If the field sits on an underlined blank**, keep Cover height "
+                "**just tall enough for the text itself** — if it's too tall it will paint "
+                "over the underline too and erase it. Use the Preview button below to check "
+                "before generating, and shrink the height if the line disappears."
+            )
+            positions = {}
+            for idx, h in enumerate(headers):
+                st.markdown(f"**Field: `{h}`**")
+                cx, cy, cs, ca, cb = st.columns(5)
+                with cx:
+                    x_pos = st.number_input(f"X — {h}", min_value=0, max_value=W, value=int(W * 0.3), key=f"cx_{h}")
+                with cy:
+                    y_pos = st.number_input(f"Y — {h}", min_value=0, max_value=H, value=int(H * 0.5) + idx * 40, key=f"cy_{h}")
+                with cs:
+                    f_size = st.number_input(f"Font size — {h}", min_value=8, max_value=200, value=28, key=f"cs_{h}")
+                with ca:
+                    align_type = st.selectbox(f"Align — {h}", options=["Left", "Center"], key=f"ca_{h}")
+                with cb:
+                    bold_type = st.checkbox("Bold", key=f"cb_{h}")
+                ccw, cch = st.columns(2)
+                with ccw:
+                    cover_w = st.number_input(
+                        f"Cover width — {h} (0 = no cover, don't erase anything)",
+                        min_value=0, max_value=W, value=250, key=f"ccw_{h}",
+                    )
+                with cch:
+                    cover_h = st.number_input(
+                        f"Cover height — {h} (keep tight if there's an underline just below)",
+                        min_value=0, max_value=H, value=int(f_size * 1.25), key=f"cch_{h}",
+                    )
+                positions[h] = {
+                    "x": x_pos, "y": y_pos, "size": f_size, "align": align_type, "bold": bold_type,
+                    "cover_w": cover_w, "cover_h": cover_h,
+                }
+
+            folder_col2 = st.selectbox(
+                "Sort output into folders by column? (optional)",
+                options=["(no folders — flat list)"] + [str(h) for h in headers],
+                key="coord_folder_col",
+            )
+            name_col2 = st.selectbox(
+                "Use which column to name each file?", options=[str(h) for h in headers], key="coord_name_col"
+            )
 
             font_path_regular = None
             font_path_bold = None
@@ -1237,66 +867,15 @@ with tab3:
                     font_path_bold = candidate
                     break
 
-            def _draw_positions_preview(sample_row):
-                """Render the template with the CURRENT X/Y/size/align values
-                stamped using one real row of data, so you can see exactly
-                where text will land and fix it BEFORE running all 2000 —
-                instead of guessing coordinates blind and finding out only
-                after generating the whole batch."""
-                rowdict = dict(zip(headers, sample_row))
-                img_copy = base_image.copy()
-                draw = ImageDraw.Draw(img_copy)
+            if st.button("👁️ Preview cover boxes (see what will be erased, before generating)"):
+                _prev = base_image.copy()
+                _pd = ImageDraw.Draw(_prev)
                 for h, pos in positions.items():
-                    text_val = str(rowdict.get(h, "") if rowdict.get(h) is not None else "")
-                    chosen_path = font_path_bold if pos.get("bold") and font_path_bold else font_path_regular
-                    try:
-                        font = ImageFont.truetype(chosen_path, pos["size"]) if chosen_path else ImageFont.load_default()
-                    except Exception:
-                        font = ImageFont.load_default()
-                    left, top, right, bottom = draw.textbbox((0, 0), text_val, font=font)
-                    text_width = right - left
-                    final_x = pos["x"] - (text_width / 2) if pos["align"] == "Center" else pos["x"]
-                    # crosshair at the exact anchor point, so you can tell
-                    # "position" from "where the text visually starts"
-                    draw.line([(pos["x"] - 6, pos["y"]), (pos["x"] + 6, pos["y"])], fill=(255, 0, 0), width=1)
-                    draw.line([(pos["x"], pos["y"] - 6), (pos["x"], pos["y"] + 6)], fill=(255, 0, 0), width=1)
-                    draw.text((final_x, pos["y"]), text_val, fill=(0, 0, 0), font=font)
-                return img_copy
-
-            st.write("#### 3. Set the X/Y position for each field (same position used for every student)")
-            positions = {}
-            for idx, h in enumerate(headers):
-                st.markdown(f"**Field: `{h}`**")
-                cx, cy, cs, ca, cb = st.columns(5)
-                with cx:
-                    x_pos = st.number_input(f"X — {h}", min_value=0, max_value=W, value=int(W * 0.3), key=f"cx_{h}")
-                with cy:
-                    y_pos = st.number_input(f"Y — {h}", min_value=0, max_value=H, value=int(H * 0.5) + idx * 40, key=f"cy_{h}")
-                with cs:
-                    f_size = st.number_input(f"Font size — {h}", min_value=8, max_value=200, value=28, key=f"cs_{h}")
-                with ca:
-                    align_type = st.selectbox(f"Align — {h}", options=["Left", "Center"], key=f"ca_{h}")
-                with cb:
-                    bold_type = st.checkbox("Bold", key=f"cb_{h}")
-                positions[h] = {"x": x_pos, "y": y_pos, "size": f_size, "align": align_type, "bold": bold_type}
-
-            if rows:
-                st.write("#### 👀 Live preview — check this BEFORE generating all rows")
-                st.caption(
-                    "Uses your first Excel row as a sample. The red crosshair marks the exact "
-                    "X/Y anchor point for each field — adjust the numbers above and this updates."
-                )
-                st.image(_draw_positions_preview(rows[0]), caption="Preview with real data", width=500)
-
-            folder_col2 = st.selectbox(
-                "Sort output into folders by column? (optional)",
-                options=["(no folders — flat list)"] + [str(h) for h in headers],
-                key="coord_folder_col",
-            )
-            name_col2 = st.selectbox(
-                "Use which column to name each file?", options=[str(h) for h in headers], key="coord_name_col"
-            )
-
+                    if pos["cover_w"] > 0 and pos["cover_h"] > 0:
+                        box = [pos["x"], pos["y"], pos["x"] + pos["cover_w"], pos["y"] + pos["cover_h"]]
+                        _pd.rectangle(box, outline="red", width=3)
+                        _pd.text((box[0], box[1] - 18), h, fill="red")
+                st.image(_prev, caption="Red boxes show what will be painted over white before writing new text", width=650)
 
             if st.button(f"🚀 Generate all {len(rows)} personalized files", key="coord_generate"):
                 zip_buf = io.BytesIO()
@@ -1308,6 +887,12 @@ with tab3:
                         draw = ImageDraw.Draw(img_copy)
                         for h, pos in positions.items():
                             text_val = str(rowdict.get(h, "") if rowdict.get(h) is not None else "")
+                            # Erase any existing text in this area FIRST
+                            if pos["cover_w"] > 0 and pos["cover_h"] > 0:
+                                draw.rectangle(
+                                    [pos["x"], pos["y"], pos["x"] + pos["cover_w"], pos["y"] + pos["cover_h"]],
+                                    fill=(255, 255, 255),
+                                )
                             chosen_path = font_path_bold if pos.get("bold") and font_path_bold else font_path_regular
                             try:
                                 font = ImageFont.truetype(chosen_path, pos["size"]) if chosen_path else ImageFont.load_default()
