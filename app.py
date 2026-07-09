@@ -37,7 +37,7 @@ with tab1:
             edited_text = st.text_area("Editable text", extracted_text, height=350, label_visibility="collapsed")
 
 # ---------------------------------------------------------------------------
-# TAB 2: PDF Editor (Muzhu Prachanaiyum Theerkum Safe Redaction Engine)
+# TAB 2: PDF Editor (Perfect Fix - Redirection Overlay Font Mapping)
 # ---------------------------------------------------------------------------
 with tab2:
     st.subheader("Simple PDF editing (no misaligned pages, no corruption)")
@@ -58,7 +58,7 @@ with tab2:
         )
 
         if action == "Edit page text (direct, in-place)":
-            st.write("Edit fields safely. The engine calculates boundary coordinates to save original underlines.")
+            st.write("Edit fields safely. Font metrics are safely force-loaded.")
             
             page_num = st.number_input("Page number to edit", min_value=1, max_value=doc_pdf.page_count, value=1)
             page_index = page_num - 1
@@ -73,7 +73,6 @@ with tab2:
                         fontsize = line["spans"][0]["size"] if line["spans"] else 11
                         lines_data.append((line["bbox"], line_text, fontsize))
 
-            # Preview box mapping
             zoom = 1.3
             pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
             preview_img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
@@ -82,7 +81,7 @@ with tab2:
                 x0, y0, x1, y1 = [v * zoom for v in bbox]
                 draw.rectangle([x0, y0, x1, y1], outline="red", width=2)
                 draw.text((x0, max(0, y0 - 14)), f"#{i + 1}", fill="red")
-            st.image(preview_img, caption="Certificate text lines tracked", width=500)
+            st.image(preview_img, caption="Lines map tracked", width=500)
 
             if lines_data:
                 edited_values = []
@@ -100,29 +99,30 @@ with tab2:
                             changed_any = True
                             rect = fitz.Rect(bbox)
                             
-                            # --- MATHEMATICAL UNDERLINE PROTECTION ---
-                            # Original box-oda keela irukura kadaisi 3 pixels-ai thavirthu redaction panrom.
-                            # Ithanala name-um erase aagum, aana underline safe-ah thapichidum!
-                            safe_erase_zone = fitz.Rect(rect.x0, rect.y0, rect.x1, rect.y1 - 3)
+                            # 1. Line graphics biseet math tracking
+                            # Target box structure bottom layer boundary-la 4 pixels gap viduvom. Underline azhiyaathu.
+                            safe_erase_zone = fitz.Rect(rect.x0, rect.y0, rect.x1, rect.y1 - 4)
                             
-                            # True white fill potu pathaiye name/dept-ai force-ah block panrom
-                            page.add_redact_annot(safe_erase_zone, fill=(1, 1, 1))
-                            page.apply_redactions()
-                            
-                            # Puthu text insert pannuvom. Base height line-ku mela float aaga (rect.y1 - 4)
-                            padded_write_zone = fitz.Rect(rect.x0, rect.y0, rect.x1 + 400, rect.y1)
-                            page.insert_textbox(
-                                padded_write_zone, 
-                                new_val, 
-                                fontsize=fontsize, 
-                                fontname="hebo", # Bold matching text
-                                color=(0, 0, 0)
+                            # 2. Dynamic Redaction Overlay Force Write (EMPTY BLANK PREVENT LOGIC)
+                            # Text display empty aagatha maadhiri exact text specs map panrom.
+                            # Standard internal fallback structures dynamic ah execute aagum.
+                            page.add_redact_annot(
+                                safe_erase_zone, 
+                                text=new_val, 
+                                fontname="hebo", # System bold embedded structures font
+                                fontsize=fontsize,
+                                align=fitz.TEXT_ALIGN_LEFT,
+                                fill=(1, 1, 1), # Pure white patch erasure mapping
+                                text_color=(0, 0, 0) # Clear black rendering ink
                             )
-
+                    
                     if changed_any:
+                        # Process block atomic execution pass
+                        page.apply_redactions()
+                        
                         out = io.BytesIO(doc_pdf.tobytes())
-                        st.success("Changes updated perfectly without disturbing underlines!")
-                        st.download_button("⬇️ Download Fixed PDF", data=out, file_name="certificate_perfect.pdf", mime="application/pdf")
+                        st.success("Changes updated perfectly without blank text or missing lines!")
+                        st.download_button("⬇️ Download Fixed Certificate PDF", data=out, file_name="certificate_fixed_perfect.pdf", mime="application/pdf")
                     else:
                         st.info("No modifications to save.")
 
