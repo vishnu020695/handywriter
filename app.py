@@ -35,7 +35,7 @@ with tab1:
             edited_text = st.text_area("Editable text", extracted_text, height=350, label_visibility="collapsed")
 
 # ---------------------------------------------------------------------------
-# TAB 2: PDF Editor (Strict Font, Position & Underline Restoration Engine)
+# TAB 2: PDF Editor (Bulletproof Coordinate Masking & Line Restoration)
 # ---------------------------------------------------------------------------
 with tab2:
     st.subheader("Simple PDF editing (no misaligned pages, no corruption)")
@@ -51,22 +51,8 @@ with tab2:
             ["Edit page text (direct, in-place)", "Delete pages", "Rotate pages"]
         )
 
-        def _get_original_embedded_font(page, span_font_name):
-            try:
-                candidates = list(page.get_fonts(full=True))
-                for xref, ext, subtype, basefont, refname, encoding in candidates:
-                    if span_font_name and (span_font_name in basefont or basefont in span_font_name):
-                        fontname, fontext, fonttype, fontbuffer = doc_pdf.extract_font(xref)
-                        if fontbuffer:
-                            alias = f"embedded_{xref}"
-                            page.insert_font(fontname=alias, fontbuffer=fontbuffer)
-                            return alias
-            except Exception:
-                pass
-            return "helv"
-
         if action == "Edit page text (direct, in-place)":
-            st.write("Modifying fields while maintaining native look and geometry layout context.")
+            st.write("Edit fields safely. Text and lines are forcefully drawn via explicit graphic layers.")
             
             page_num = st.number_input("Page number to edit", min_value=1, max_value=doc_pdf.page_count, value=1)
             page_index = page_num - 1
@@ -90,7 +76,7 @@ with tab2:
                 x0, y0, x1, y1 = [v * zoom for v in bbox]
                 draw.rectangle([x0, y0, x1, y1], outline="red", width=2)
                 draw.text((x0, max(0, y0 - 14)), f"#{i + 1}", fill="red")
-            st.image(preview_img, caption="Certificate structures mapped", width=500)
+            st.image(preview_img, caption="Text mapping zones", width=500)
 
             if lines_data:
                 edited_values = []
@@ -100,7 +86,7 @@ with tab2:
                     val = st.text_input(f"Box #{i + 1} ({original_text[:30]})", original_text, key=f"line_{page_index}_{i}")
                     edited_values.append(val)
 
-                if st.button("Apply Edits & Fix Underlines"):
+                if st.button("Apply Changes (Force Write Engine)"):
                     changed_any = False
                     
                     for (bbox, line_text, fontsize, font_name), new_val in zip(lines_data, edited_values):
@@ -108,45 +94,40 @@ with tab2:
                             changed_any = True
                             rect = fitz.Rect(bbox)
                             
-                            # Step 1: Safe white patch clear block zone tracking (Stops safely above underline)
-                            safe_erase_zone = fitz.Rect(rect.x0, rect.y0, rect.x1, rect.y1 - 3)
-                            page.add_redact_annot(safe_erase_zone, fill=(1, 1, 1))
-                            page.apply_redactions()
+                            # STEP 1: Draw a physical white rectangle to hide the old text without destroying coordinates
+                            # We stop 3 pixels above the bottom edge to safeguard the original line region
+                            mask_rect = fitz.Rect(rect.x0 - 5, rect.y0 - 2, rect.x1 + 5, rect.y1 - 3)
+                            page.draw_rect(mask_rect, color=(1, 1, 1), fill=(1, 1, 1), overlay=True)
                             
-                            # Step 2: Render Text with explicit fallbacks to prevent empty blanks
-                            actual_font = _get_original_embedded_font(page, font_name)
-                            centered_write_zone = fitz.Rect(rect.x0 - 200, rect.y0 - 2, rect.x1 + 200, rect.y1 + 2)
+                            # STEP 2: Use standard core-14 Bold Times/Helvetica to enforce text rendering
+                            # This completely bypasses the font compression/empty text error
+                            font_fallback = "tibo" if "times" in font_name.lower() or "serif" in font_name.lower() else "hebo"
                             
-                            rc = page.insert_textbox(
-                                centered_write_zone, 
+                            # Expand textbox horizontally to allow perfect center tracking (align=1)
+                            write_rect = fitz.Rect(rect.x0 - 150, rect.y0 - 1, rect.x1 + 150, rect.y1 + 2)
+                            page.insert_textbox(
+                                write_rect, 
                                 new_val, 
                                 fontsize=fontsize, 
-                                fontname=actual_font, 
+                                fontname=font_fallback, 
                                 color=(0, 0, 0),
-                                align=1  # Center alignment lock
+                                align=1  # Perfect Center Alignment Lock
                             )
                             
-                            # If rendering fails (rc < 0), force explicit standard Base-14 fallback mapping
-                            if rc < 0:
-                                page.insert_textbox(
-                                    centered_write_zone, 
-                                    new_val, 
-                                    fontsize=fontsize, 
-                                    fontname="hebo", 
-                                    color=(0, 0, 0),
-                                    align=1
-                                )
-                                
-                            # Step 3: Core Correction - Clean line vector stroke reconstruction
-                            # White patch data blocks cross layer boundary lines erase pannirundha, 
-                            # intha vector drawing patch lines neat ah thirumbha apdiye draw pannidum!
+                            # STEP 3: Re-draw a fresh, crisp vector line exactly at the baseline path
+                            # This replaces any accidental pixel clipping with a high-fidelity line asset
                             line_y = rect.y1 - 1
-                            page.draw_line(fitz.Point(rect.x0, line_y), fitz.Point(rect.x1, line_y), color=(0.6, 0.6, 0.6), width=1)
+                            page.draw_line(
+                                fitz.Point(rect.x0 - 10, line_y), 
+                                fitz.Point(rect.x1 + 10, line_y), 
+                                color=(0.4, 0.4, 0.4), 
+                                width=1.2
+                            )
 
                     if changed_any:
                         out = io.BytesIO(doc_pdf.tobytes())
-                        st.success("All errors successfully fixed! Text layout and line layers fully restored.")
-                        st.download_button("⬇️ Download Verified PDF", data=out, file_name="certificate_fixed.pdf", mime="application/pdf")
+                        st.success("Successfully processed! Content layers locked and generated.")
+                        st.download_button("⬇️ Download Fixed PDF", data=out, file_name="certificate_fixed.pdf", mime="application/pdf")
                     else:
                         st.info("No modifications detected.")
 
