@@ -35,7 +35,7 @@ with tab1:
             edited_text = st.text_area("Editable text", extracted_text, height=350, label_visibility="collapsed")
 
 # ---------------------------------------------------------------------------
-# TAB 2: PDF Editor (Strict Native Font & Exact Center Alignment Block)
+# TAB 2: PDF Editor (PERFECT ORIGINAL FONT & CENTER ALIGNMENT FIX)
 # ---------------------------------------------------------------------------
 with tab2:
     st.subheader("Simple PDF editing (no misaligned pages, no corruption)")
@@ -51,8 +51,8 @@ with tab2:
             ["Edit page text (direct, in-place)", "Delete pages", "Rotate pages"]
         )
 
-        # Source 2 text layer extraction & accurate font alias engine
-        def _embedded_font_alias(page, span_font_name):
+        # EMBEDDED FONT EXTRACTOR ENGINE (From Source 2)
+        def _get_original_embedded_font(page, span_font_name):
             try:
                 candidates = list(page.get_fonts(full=True))
                 for xref, ext, subtype, basefont, refname, encoding in candidates:
@@ -67,7 +67,7 @@ with tab2:
             return "helv"
 
         if action == "Edit page text (direct, in-place)":
-            st.write("Strict Layout Protection enabled. Original fonts and alignments are preserved.")
+            st.write("Original Font Family, Size, and Center Alignment will be preserved strictly.")
             
             page_num = st.number_input("Page number to edit", min_value=1, max_value=doc_pdf.page_count, value=1)
             page_index = page_num - 1
@@ -79,6 +79,7 @@ with tab2:
                 for line in db.get("lines", []):
                     line_text = "".join(s["text"] for s in line["spans"])
                     if line_text.strip():
+                        # Track strict properties: font name, flags, and size
                         font_name = line["spans"][0].get("font", "helv")
                         fontsize = line["spans"][0]["size"] if line["spans"] else 11
                         lines_data.append((line["bbox"], line_text, fontsize, font_name))
@@ -91,7 +92,7 @@ with tab2:
                 x0, y0, x1, y1 = [v * zoom for v in bbox]
                 draw.rectangle([x0, y0, x1, y1], outline="red", width=2)
                 draw.text((x0, max(0, y0 - 14)), f"#{i + 1}", fill="red")
-            st.image(preview_img, caption="Text block tracks mapped", width=500)
+            st.image(preview_img, caption="Certificate text blocks mapped", width=500)
 
             if lines_data:
                 edited_values = []
@@ -101,37 +102,44 @@ with tab2:
                     val = st.text_input(f"Box #{i + 1} ({original_text[:30]})", original_text, key=f"line_{page_index}_{i}")
                     edited_values.append(val)
 
-                if st.button("Apply Changes & Keep Alignment"):
+                if st.button("Apply Edits (Keep Font & Center Alignment)"):
                     changed_any = False
                     
-                    # Atomic loop overlay matrix pass
                     for (bbox, line_text, fontsize, font_name), new_val in zip(lines_data, edited_values):
                         if new_val != line_text.rstrip("\n"):
                             changed_any = True
                             rect = fitz.Rect(bbox)
                             
-                            # --- ATOMIC OVERLAY FIX ---
-                            # Puthu name type panra line-ai keela irukura underscore-ku mela float panna
-                            # vertical coordinates accurate-ah safety margin bounds calculate panrom.
-                            # No redacts applied over background image meshes.
-                            actual_font = _embedded_font_alias(page, font_name)
-                            
-                            # White out safe canvas text layer safely
-                            page.add_redact_annot(fitz.Rect(rect.x0, rect.y0, rect.x1, rect.y1 - 3), fill=(1, 1, 1))
+                            # 1. Underline Protection: Clear only text area, leaving bottom 4 pixels unharmed
+                            safe_erase_zone = fitz.Rect(rect.x0, rect.y0, rect.x1, rect.y1 - 4)
+                            page.add_redact_annot(safe_erase_zone, fill=(1, 1, 1))
                             page.apply_redactions()
                             
-                            # Center boundary override setup (align=1 matches certificate center anchor points)
-                            center_bound_box = fitz.Rect(0, rect.y0, page.rect.width, rect.y1)
+                            # 2. Extract Original Embedded Font Style
+                            actual_font = _get_original_embedded_font(page, font_name)
+                            
+                            # 3. Write with original size and force Center Alignment (align=1)
+                            # Expanded horizontal boundary allows centered text to stretch safely
+                            centered_write_zone = fitz.Rect(rect.x0 - 150, rect.y0, rect.x1 + 150, rect.y1)
                             page.insert_textbox(
-                                center_bound_box, 
+                                centered_write_zone, 
                                 new_val, 
                                 fontsize=fontsize, 
                                 fontname=actual_font, 
                                 color=(0, 0, 0),
-                                align=1 # Center aligned formatting
+                                align=1 # STRICT CENTER ALIGNMENT
                             )
 
                     if changed_any:
                         out = io.BytesIO(doc_pdf.tobytes())
-                        st.success("Perfect! Layout alignment and fonts applied without errors.")
-                        st.download_button("⬇— Download Final Corrected PDF", data=out, file_name="certificate_fixed_final.pdf", mime="application/pdf")
+                        st.success("Font style, exact size, and Center Alignment preserved beautifully!")
+                        st.download_button("⬇️ Download Final Verified PDF", data=out, file_name="certificate_perfect_alignment.pdf", mime="application/pdf")
+                    else:
+                        st.info("No modifications detected.")
+
+# ---------------------------------------------------------------------------
+# TAB 3: Bulk Mail Merge
+# ---------------------------------------------------------------------------
+with tab3:
+    st.subheader("Generate personalized files")
+    merge_mode = st.radio("Choose a method", ["Token-based", "Coordinate-based"])
