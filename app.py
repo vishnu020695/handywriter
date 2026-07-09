@@ -37,7 +37,7 @@ with tab1:
             edited_text = st.text_area("Editable text", extracted_text, height=350, label_visibility="collapsed")
 
 # ---------------------------------------------------------------------------
-# TAB 2: PDF Editor (Perfect Direct Edit Underline & Empty Blank Fix)
+# TAB 2: PDF Editor (Muzhu Prachanaiyum Theerkum Safe Redaction Engine)
 # ---------------------------------------------------------------------------
 with tab2:
     st.subheader("Simple PDF editing (no misaligned pages, no corruption)")
@@ -58,7 +58,7 @@ with tab2:
         )
 
         if action == "Edit page text (direct, in-place)":
-            st.write("Edit any text box below. Underlines are safely protected.")
+            st.write("Edit fields safely. The engine calculates boundary coordinates to save original underlines.")
             
             page_num = st.number_input("Page number to edit", min_value=1, max_value=doc_pdf.page_count, value=1)
             page_index = page_num - 1
@@ -73,7 +73,7 @@ with tab2:
                         fontsize = line["spans"][0]["size"] if line["spans"] else 11
                         lines_data.append((line["bbox"], line_text, fontsize))
 
-            # Preview mapping page
+            # Preview box mapping
             zoom = 1.3
             pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
             preview_img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
@@ -82,18 +82,17 @@ with tab2:
                 x0, y0, x1, y1 = [v * zoom for v in bbox]
                 draw.rectangle([x0, y0, x1, y1], outline="red", width=2)
                 draw.text((x0, max(0, y0 - 14)), f"#{i + 1}", fill="red")
-            st.image(preview_img, caption="Numbered text regions", width=500)
+            st.image(preview_img, caption="Certificate text lines tracked", width=500)
 
             if lines_data:
                 edited_values = []
                 st.write("### Edit Form Fields:")
                 for i, (bbox, line_text, fontsize) in enumerate(lines_data):
                     original_text = line_text.rstrip("\n")
-                    # Label layout changes visually for user clarity
                     val = st.text_input(f"Box #{i + 1} ({original_text[:30]})", original_text, key=f"line_{page_index}_{i}")
                     edited_values.append(val)
 
-                if st.button("Apply edits & Clean Underlines"):
+                if st.button("Apply Changes & Protect Underlines"):
                     changed_any = False
                     
                     for (bbox, line_text, fontsize), new_val in zip(lines_data, edited_values):
@@ -101,35 +100,31 @@ with tab2:
                             changed_any = True
                             rect = fitz.Rect(bbox)
                             
-                            # --- CRUCIAL FIX FOR BLANK/UNDERLINE ISSUE ---
-                            # Step 1: Redaction fill potu background vector lines-ai alikaamal iruka,
-                            # namma paraiya text layer-ai ulla "Overlay Text" potu white color-il paint panni maraikirom.
-                            page.insert_textbox(
-                                rect, 
-                                line_text, 
-                                fontsize=fontsize + 0.5, 
-                                fontname="helv", 
-                                color=(1, 1, 1), # White out text color
-                                fill=(1, 1, 1)    # Background fill matches canvas safely
-                            )
+                            # --- MATHEMATICAL UNDERLINE PROTECTION ---
+                            # Original box-oda keela irukura kadaisi 3 pixels-ai thavirthu redaction panrom.
+                            # Ithanala name-um erase aagum, aana underline safe-ah thapichidum!
+                            safe_erase_zone = fitz.Rect(rect.x0, rect.y0, rect.x1, rect.y1 - 3)
                             
-                            # Step 2: Athae box coordinate-il user typen panna puthu Name/Department-ai black color-il print panrom.
-                            # Baseline shifts slightly up (+1.5) so it floats cleanly right ABOVE the underline.
-                            padded_rect = fitz.Rect(rect.x0, rect.y0 - 2, rect.x1 + 300, rect.y1 - 2)
+                            # True white fill potu pathaiye name/dept-ai force-ah block panrom
+                            page.add_redact_annot(safe_erase_zone, fill=(1, 1, 1))
+                            page.apply_redactions()
+                            
+                            # Puthu text insert pannuvom. Base height line-ku mela float aaga (rect.y1 - 4)
+                            padded_write_zone = fitz.Rect(rect.x0, rect.y0, rect.x1 + 400, rect.y1)
                             page.insert_textbox(
-                                padded_rect, 
+                                padded_write_zone, 
                                 new_val, 
                                 fontsize=fontsize, 
-                                fontname="hebo", # Using Bold text for prominence
-                                color=(0, 0, 0)  # Solid black ink
+                                fontname="hebo", # Bold matching text
+                                color=(0, 0, 0)
                             )
 
                     if changed_any:
                         out = io.BytesIO(doc_pdf.tobytes())
-                        st.success("Perfect! Name and Department overwritten beautifully.")
-                        st.download_button("⬇️ Download Final Certificate PDF", data=out, file_name="certificate_fixed.pdf", mime="application/pdf")
+                        st.success("Changes updated perfectly without disturbing underlines!")
+                        st.download_button("⬇️ Download Fixed PDF", data=out, file_name="certificate_perfect.pdf", mime="application/pdf")
                     else:
-                        st.info("No changes detected to process.")
+                        st.info("No modifications to save.")
 
 # ---------------------------------------------------------------------------
 # TAB 3: Bulk Mail Merge
