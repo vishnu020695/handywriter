@@ -126,19 +126,10 @@ with tab1:
                         if st.button("💾 Apply Text Replacements & Refresh", use_container_width=True):
                             # Underline safe execution - strict bounding box targeting
                             for idx, edit in edits_to_apply.items():
-                                bbox = edit["bbox"]
-                                cover_rect = fitz.Rect(
-                                    bbox.x0,
-                                    bbox.y0,
-                                    bbox.x1,
-                                    bbox.y1 - 4
-                                )
-                                page.draw_rect(
-                                    cover_rect,
-                                    color=None,
-                                    fill=(1, 1, 1),
-                                    overlay=True
-                                )
+                                # Narrow down top/bottom to prevent erasing underlines beneath text baseline
+                                tight_bbox = fitz.Rect(edit["bbox"].x0, edit["bbox"].y0, edit["bbox"].x1, edit["bbox"].y1 - 4)
+                                page.add_redact_annot(tight_bbox, fill=(1, 1, 1))
+                            page.apply_redactions()
                             
                             page_rect = page.rect
                             for idx, edit in edits_to_apply.items():
