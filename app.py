@@ -640,13 +640,15 @@ with tab2:
             # side by side on a certificate) as separate editable boxes, while still
             # keeping normal sentences/paragraphs as single boxes.
             text_dict = page.get_text("dict")
-            lines_data = []  # list of (bbox, text, fontsize)
+            lines_data = []  # list of (bbox, text, fontsize, font_name, flags)
             for db in text_dict["blocks"]:
                 for line in db.get("lines", []):
                     line_text = "".join(s["text"] for s in line["spans"])
                     if line_text.strip():
                         fontsize = line["spans"][0]["size"] if line["spans"] else 11
-                        lines_data.append((line["bbox"], line_text, fontsize))
+                        font_name = line["spans"][0].get("font") if line["spans"] else None
+                        flags = line["spans"][0].get("flags", 0) if line["spans"] else 0
+                        lines_data.append((line["bbox"], line_text, fontsize, font_name, flags))
 
             search_query = st.text_input(
                 "🔍 Type part of the text you want to change (leave empty to see every box)",
@@ -654,7 +656,7 @@ with tab2:
             )
             if search_query.strip():
                 matching_idx = {
-                    i for i, (_, text, _) in enumerate(lines_data)
+                    i for i, (_, text, _, _, _) in enumerate(lines_data)
                     if search_query.strip().lower() in text.lower()
                 }
                 if not matching_idx:
@@ -673,7 +675,7 @@ with tab2:
             from PIL import Image as PILImage, ImageDraw
             preview_img = PILImage.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
             draw = ImageDraw.Draw(preview_img)
-            for i, (bbox, _, _) in enumerate(lines_data):
+            for i, (bbox, _, _, _, _) in enumerate(lines_data):
                 x0, y0, x1, y1 = [v * zoom for v in bbox]
                 if i in matching_idx:
                     draw.rectangle([x0, y0, x1, y1], outline="red", width=2)
@@ -694,7 +696,7 @@ with tab2:
                 else:
                     st.write(f"**{len(lines_data)}** editable text lines found on this page:")
                 edited_values = []
-                for i, (bbox, line_text, fontsize) in enumerate(lines_data):
+                for i, (bbox, line_text, fontsize, font_name, flags) in enumerate(lines_data):
                     original_text = line_text.rstrip("\n")
                     if i not in matching_idx:
                         # keep the value unchanged for boxes hidden by the filter,
@@ -706,26 +708,65 @@ with tab2:
                     )
                     edited_values.append(val)
 
-                st.write("**Font settings for edited boxes:**")
+                st.write("**Font for edited boxes:**")
                 lf1, lf2, lf3 = st.columns(3)
                 with lf1:
                     line_font_choice = st.selectbox(
-                        "Font", ["Default (Helvetica)", "Times New Roman", "Courier (monospace)"],
+                        "Font", ["Auto-match original", "Force Helvetica", "Force Times New Roman", "Force Courier (monospace)"],
                         key=f"line_font_choice_{page_index}",
+                        help="Auto-match tries to reuse each box's own original font "
+                             "(so a bold heading stays bold Times, a plain line stays plain, etc). "
+                             "Only pick a forced font if you specifically want to override that.",
                     )
                 with lf2:
-                    line_bold = st.checkbox("Bold", key=f"line_bold_{page_index}")
+                    line_bold = st.checkbox("Force Bold", key=f"line_bold_{page_index}")
                 with lf3:
                     line_size_override = st.number_input(
                         "Font size (0 = auto-match original)", min_value=0, max_value=200, value=0,
                         key=f"line_size_{page_index}",
                     )
                 _line_font_map = {
-                    "Default (Helvetica)": {"regular": "helv", "bold": "hebo"},
-                    "Times New Roman": {"regular": "tiro", "bold": "tibo"},
-                    "Courier (monospace)": {"regular": "cour", "bold": "cobo"},
+                    "Force Helvetica": {"regular": "helv", "bold": "hebo"},
+                    "Force Times New Roman": {"regular": "tiro", "bold": "tibo"},
+                    "Force Courier (monospace)": {"regular": "cour", "bold": "cobo"},
                 }
-                line_fontname = _line_font_map[line_font_choice]["bold" if line_bold else "regular"]
+
+                def _line_flags_to_base14(flags, serif_hint, force_bold):
+                    italic = bool(flags & 2)
+                    bold = bool(flags & 16) or force_bold
+                    mono = bool(flags & 8)
+                    serif = serif_hint or bool(flags & 4)
+                    if mono:
+                        return "cobi" if (bold and italic) else "cobo" if bold else "coit" if italic else "cour"
+                    if serif:
+                        return "tibi" if (bold and italic) else "tibo" if bold else "tiit" if italic else "tiro"
+                    return "hebi" if (bold and italic) else "hebo" if bold else "heit" if italic else "helv"
+
+                _line_font_cache = {}
+
+                def _line_embedded_font_alias(page, span_font_name):
+                    """Reuse the box's ACTUAL original embedded font, so text
+                    that's already the right typeface (e.g. bold Times for a
+                    heading) doesn't get flattened into generic Helvetica —
+                    that mismatch is what made an edited sentence look like a
+                    pasted-in block before."""
+                    if not span_font_name:
+                        return None
+                    if span_font_name in _line_font_cache:
+                        return _line_font_cache[span_font_name]
+                    try:
+                        for xref, ext, subtype, basefont, refname, encoding in page.get_fonts(full=True):
+                            if basefont == span_font_name or span_font_name in basefont:
+                                fontname, fontext, fonttype, fontbuffer = doc_pdf.extract_font(xref)
+                                if fontbuffer:
+                                    alias = f"lineembed_{xref}"
+                                    page.insert_font(fontname=alias, fontbuffer=fontbuffer)
+                                    _line_font_cache[span_font_name] = alias
+                                    return alias
+                    except Exception:
+                        pass
+                    _line_font_cache[span_font_name] = None
+                    return None
 
                 def _split_filler_ends(text):
                     """Split off any leading/trailing blank-line filler
@@ -751,8 +792,8 @@ with tab2:
 
                 if st.button("Apply edits to this page and download"):
                     changed_any = False
-                    edits = []  # (bbox, final_text, fontsize)
-                    for (bbox, line_text, fontsize), new_val in zip(lines_data, edited_values):
+                    edits = []  # (bbox, final_text, fontsize, fontname)
+                    for (bbox, line_text, fontsize, font_name, flags), new_val in zip(lines_data, edited_values):
                         original_text = line_text.rstrip("\n")
                         if new_val != original_text:
                             changed_any = True
@@ -767,13 +808,24 @@ with tab2:
                             final_trailing = new_trailing if new_trailing else orig_trailing
                             final_val = final_leading + new_core + final_trailing
 
-                            edits.append((fitz.Rect(bbox), final_val, use_size))
+                            edits.append((fitz.Rect(bbox), final_val, use_size, font_name, flags))
 
                     if not changed_any:
                         st.info("No changes were made.")
                     else:
                         page_rect = page.rect
-                        for bbox, final_val, fontsize in edits:
+                        for bbox, final_val, fontsize, font_name, flags in edits:
+                            # Pick the font for THIS box: auto-match the box's
+                            # own original font by default (reusing the actual
+                            # embedded font when possible, else a flags-based
+                            # Base-14 guess), or use the user's forced choice
+                            # if they explicitly picked one.
+                            if line_font_choice == "Auto-match original":
+                                alias = _line_embedded_font_alias(page, font_name)
+                                use_fontname = alias or _line_flags_to_base14(flags, serif_hint=True, force_bold=line_bold)
+                            else:
+                                use_fontname = _line_font_map[line_font_choice]["bold" if line_bold else "regular"]
+
                             # Measure with the ACTUAL font being used (accurate
                             # for Base-14 fonts) instead of assuming a fixed
                             # 300pt-wide box — that old approach either clipped
@@ -787,7 +839,10 @@ with tab2:
                             # full line (and could even bleed into neighboring
                             # text/underscores that were never meant to be
                             # touched by this edit).
-                            est_w = fitz.get_text_length(final_val, fontname=line_fontname, fontsize=fontsize)
+                            try:
+                                est_w = fitz.get_text_length(final_val, fontname=use_fontname, fontsize=fontsize)
+                            except Exception:
+                                est_w = fitz.get_text_length(final_val, fontname="helv", fontsize=fontsize)
                             box = fitz.Rect(
                                 bbox.x0, bbox.y0 - fontsize * 0.3,
                                 min(bbox.x0 + est_w + 4, page_rect.width - 10),
@@ -796,7 +851,7 @@ with tab2:
                             page.add_redact_annot(
                                 box,
                                 text=final_val,
-                                fontname=line_fontname,
+                                fontname=use_fontname,
                                 fontsize=fontsize,
                                 align=fitz.TEXT_ALIGN_LEFT,
                                 fill=(1, 1, 1),
