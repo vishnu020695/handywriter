@@ -651,9 +651,23 @@ with tab2:
                 for line in db.get("lines", []):
                     line_text = "".join(s["text"] for s in line["spans"])
                     if line_text.strip():
-                        fontsize = line["spans"][0]["size"] if line["spans"] else 11
-                        font_name = line["spans"][0].get("font") if line["spans"] else None
-                        flags = line["spans"][0].get("flags", 0) if line["spans"] else 0
+                        spans = line["spans"]
+                        if spans:
+                            # Use the DOMINANT span (most characters), not just
+                            # the first one. A sentence like "has successfully
+                            # completed **Enhancement Program**" starts with
+                            # regular text but the first span alone isn't
+                            # representative — picking font/bold/size from
+                            # whichever span happens to come first was a
+                            # coin-flip that could make an entire mostly-plain
+                            # sentence render bold if it happened to start on
+                            # a short bold fragment (or vice versa).
+                            dominant = max(spans, key=lambda s: len(s.get("text", "")))
+                            fontsize = dominant["size"]
+                            font_name = dominant.get("font")
+                            flags = dominant.get("flags", 0)
+                        else:
+                            fontsize, font_name, flags = 11, None, 0
                         lines_data.append((line["bbox"], line_text, fontsize, font_name, flags))
 
             search_query = st.text_input(
@@ -862,10 +876,18 @@ with tab2:
                             # protection is to make sure our white redaction
                             # fill never reaches down far enough to paint over
                             # it in the first place.
+                            available_w = page_rect.width - 10 - bbox.x0
+                            extra_h = 0
+                            if est_w > available_w > 0:
+                                # text will need to wrap onto more than one
+                                # line within the box — give it the room, or
+                                # PyMuPDF shrinks/clips it to force a fit.
+                                wrap_lines = -(-int(est_w) // int(available_w))  # ceil
+                                extra_h = (wrap_lines - 1) * fontsize * 1.3
                             box = fitz.Rect(
                                 bbox.x0, bbox.y0 - fontsize * 0.3,
                                 min(bbox.x0 + est_w + 4, page_rect.width - 10),
-                                bbox.y1 + fontsize * 0.05,
+                                bbox.y1 + fontsize * 0.05 + extra_h,
                             )
                             page.add_redact_annot(
                                 box,
